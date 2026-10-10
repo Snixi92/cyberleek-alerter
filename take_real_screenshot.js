@@ -108,16 +108,33 @@ async function main() {
     if (evalRes.result?.result?.value) break;
   }
 
-  // Défilement 100% naturel sur les leaks (comme l'utilisateur avec sa molette)
-  // AUCUNE MODIFICATION DU DOM, AUCUNE SUPPRESSION, RIEN DE TOUCHÉ !
+  const TARGET_SECTION = process.argv[2] || 'content';
+
+  // Défilement 100% naturel selon la section ciblée (annonces, vote, ou leaks)
   await pageSend('Runtime.evaluate', {
     expression: `(() => {
-      const card = document.getElementById('card-content');
-      if (card) {
-        card.scrollIntoView({ behavior: 'instant', block: 'start' });
+      const sec = "${TARGET_SECTION}";
+      if (sec === 'anns') {
+        const card = document.getElementById('card-anns');
+        if (card) {
+          card.classList.remove('collapsed', 'hidden');
+          card.scrollIntoView({ behavior: 'instant', block: 'start' });
+        }
+      } else if (sec === 'poll') {
+        const card = document.getElementById('card-poll');
+        if (card) {
+          card.classList.remove('collapsed', 'hidden');
+          card.scrollIntoView({ behavior: 'instant', block: 'start' });
+        }
+      } else {
+        const card = document.getElementById('card-content');
+        if (card) {
+          card.scrollIntoView({ behavior: 'instant', block: 'start' });
+        }
       }
     })()`
   });
+
 
   await new Promise(r => setTimeout(r, 600));
 

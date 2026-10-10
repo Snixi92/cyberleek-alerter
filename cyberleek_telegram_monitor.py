@@ -66,9 +66,11 @@ PROGRAM_ID = "7rAgHPLDc9NryZmNdeEzyDui6D9PHkvTxMjKhNSa7w3a"
 TOKEN_ADDRESS = "ApZuxdpzMrbEYTGEzeY9afh5pj9d6qPRJCTgQYiipbKg"
 
 DISCRIMINATORS = {
-    "leek": "G6JNBZ2BSey",     # Taille 7156
-    "poll": "5Qpj1hsHT4k"      # Taille 2800
+    "leek": "G6JNBZ2BSey",         # Taille 7156
+    "announcement": "NjkxTouaByo", # Taille 656
+    "poll": "5Qpj1hsHT4k"          # Taille 2800
 }
+
 
 MIRRORS = [
     "https://cyberleek.ar.perma.online/",
@@ -176,6 +178,50 @@ def fetch_leeks():
         except Exception:
             switch_rpc()
     return []
+
+def decode_announcement(raw_bytes):
+    try:
+        reader = BinaryReader(raw_bytes[8:])
+        authority = reader.bytes(32)
+        timestamp = reader.i64()
+        title = reader.str()
+        body = reader.str()
+        return {
+            "timestamp": timestamp,
+            "title": title,
+            "body": body
+        }
+    except Exception:
+        return None
+
+def fetch_announcements():
+    for _ in range(len(RPC_ENDPOINTS)):
+        url = get_rpc()
+        payload = {
+            "jsonrpc": "2.0", "id": 1, "method": "getProgramAccounts",
+            "params": [
+                PROGRAM_ID,
+                {"encoding": "base64", "filters": [{"memcmp": {"offset": 0, "bytes": DISCRIMINATORS["announcement"]}}]}
+            ]
+        }
+        try:
+            req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), headers={"Content-Type": "application/json", "User-Agent": "CyberleekBot/1.0"})
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = json.loads(resp.read().decode())
+                res = data.get("result", [])
+                anns = []
+                for item in res:
+                    raw = base64.b64decode(item["account"]["data"][0])
+                    decoded = decode_announcement(raw)
+                    if decoded:
+                        decoded["pubkey"] = item["pubkey"]
+                        anns.append(decoded)
+                anns.sort(key=lambda x: x["timestamp"])
+                return anns
+        except Exception:
+            switch_rpc()
+    return []
+
 
 def check_mirrors():
     ctx = ssl.create_default_context()
@@ -308,19 +354,59 @@ def get_polls():
             switch_rpc()
     return []
 
-def capture_screenshot(leak=None, past_leeks=None):
+def capture_screenshot(section="content", leak=None, past_leeks=None):
     """Prend une VRAIE capture d'écran du navigateur réel sur le site Cyberleek via Chrome CDP."""
     t0 = time.time()
     try:
-        js_script = os.path.join(SCRIPT_DIR, "take_real_screenshot.js")
-        subprocess.run(["node", js_script], capture_output=True, timeout=25)
         real_out = os.path.join(SCRIPT_DIR, "real_live_website_screenshot.png")
+        if os.path.exists(real_out):
+            try:
+                os.remove(real_out)
+            except Exception:
+                pass
+        js_script = os.path.join(SCRIPT_DIR, "take_real_screenshot.js")
+        subprocess.run(["node", js_script, section], capture_output=True, timeout=30)
         if os.path.exists(real_out) and os.path.getsize(real_out) > 1000:
-            print(f"[Vraie Capture Réelle] Screenshot du site réel capturé en {time.time()-t0:.2f}s ({os.path.getsize(real_out)/1024:.1f} KB)", flush=True)
+            print(f"[Vraie Capture Réelle] Screenshot ({section}) capturé en {time.time()-t0:.2f}s ({os.path.getsize(real_out)/1024:.1f} KB)", flush=True)
             return real_out
     except Exception as e:
         print(f"[Screenshot Error] {e}", flush=True)
     return None
+
+async def delete_after_delay(client, channel, msg_id, delay=120):
+    await asyncio.sleep(delay)
+    try:
+        await client.delete_messages(channel, msg_id)
+        print(f"[Éphémère] Notification #{msg_id} supprimée après {delay}s pour préserver l'ordre du canal.", flush=True)
+    except Exception as e:
+        print(f"[Erreur suppression notif] {e}", flush=True)
+
+async def send_announcement_alert(client, channel, ann):
+    tz_fr = datetime.timezone(datetime.timedelta(hours=2))
+    dt_str = datetime.datetime.fromtimestamp(ann['timestamp'], tz=tz_fr).strftime("%d/%m/%Y à %H:%M")
+    
+    ann_lines = [
+        "📢 <b>NOUVELLE ANNONCE OFFICIELLE CYBERLEEK</b> 📢\n",
+        f"🎯 <b>Titre :</b> <code>{ann.get('title', 'Sans Titre')}</code>",
+        f"📅 <b>Date :</b> {dt_str}\n",
+        "📝 <b>Message :</b>",
+        f"<blockquote>{ann.get('body', '')}</blockquote>"
+    ]
+    ann_text = "\n".join(ann_lines)
+    
+    print(f"\n[ANNONCE DÉTECTÉE] Publication de l'annonce '{ann.get('title')}'...", flush=True)
+    screen_path = await asyncio.to_thread(capture_screenshot, "anns")
+    if screen_path and os.path.exists(screen_path):
+        caption = ann_text + "\n\n📸 <i>Capture authentique de l'onglet Annonces</i>"
+        if len(caption) <= 1024:
+            await client.send_file(channel, file=screen_path, caption=caption, parse_mode='html')
+        else:
+            msg_ann = await client.send_message(channel, message=ann_text, parse_mode='html')
+            await client.send_file(channel, file=screen_path, caption="📸 <b>Capture d'écran de l'onglet Annonces</b>", parse_mode='html', reply_to=msg_ann.id)
+    else:
+        await client.send_message(channel, message=ann_text, parse_mode='html')
+    print("  -> Annonce envoyée avec succès sur Telegram !", flush=True)
+
 
 def format_mirrors_message():
     mirror_lines = [
@@ -521,19 +607,32 @@ async def monitor_loop():
             now = time.time()
 
             # 1. DÉTECTION ON-CHAIN ULTRA-RAPIDE (toutes les 1.5s)
+            # 1. DÉTECTION ON-CHAIN DES LEAKS (toutes les 1.5s)
             fresh_leeks = fetch_leeks()
             for lk in fresh_leeks:
-                if lk["pubkey"] not in seen["leeks"]:
+                if lk["pubkey"] not in seen.get("leeks", []):
                     print(f"\n🚨 [NOUVEAU LEEK EN DIRECT DÉTECTÉ] : {lk.get('title')}", flush=True)
                     past = [p for p in fresh_leeks if p["pubkey"] != lk["pubkey"]]
-                    # Envoi dans l'ordre (Leak et Screen en dernier)
                     await send_telegram_alert(client, channel, lk, past)
                     seen = load_seen()
                     seen["leeks"].append(lk["pubkey"])
                     save_seen(seen)
                     active_msgs = seen.get("active_msgs", {})
 
-            # 2. MODIFICATION DYNAMIQUE DE LA CRYPTO (toutes les 20s)
+            # 2. DÉTECTION ON-CHAIN DES ANNONCES DU SITE (toutes les 1.5s)
+            fresh_anns = fetch_announcements()
+            seen_anns = set(seen.get("announcements", []))
+            for ann in fresh_anns:
+                if ann["pubkey"] not in seen_anns:
+                    await send_announcement_alert(client, channel, ann)
+                    seen = load_seen()
+                    if "announcements" not in seen:
+                        seen["announcements"] = []
+                    seen["announcements"].append(ann["pubkey"])
+                    save_seen(seen)
+                    seen_anns.add(ann["pubkey"])
+
+            # 3. MODIFICATION DYNAMIQUE DE LA CRYPTO ET PALIERS MCAP (toutes les 20s)
             if now - last_crypto_check >= 20:
                 last_crypto_check = now
                 crypto_id = active_msgs.get("crypto")
@@ -549,7 +648,26 @@ async def monitor_loop():
                         except Exception as e:
                             print(f"[Erreur edit crypto] {e}", flush=True)
 
-            # 3. MODIFICATION DYNAMIQUE DES VOTES (toutes les 30s)
+                # Vérification des nouveaux paliers de Market Cap (notif éphémère de 120s)
+                try:
+                    c_stats = get_crypto_stats()
+                    c_mcap = c_stats.get("mcap", 0)
+                    seen_ms = set(seen.get("mcap_milestones", [1_000_000]))
+                    mcap_steps = [1_000_000, 2_000_000, 3_000_000, 4_000_000, 5_000_000, 6_000_000, 7_000_000, 8_000_000, 9_000_000, 10_000_000, 15_000_000, 20_000_000, 25_000_000, 30_000_000]
+                    for ms in mcap_steps:
+                        if c_mcap >= ms and ms not in seen_ms:
+                            seen_ms.add(ms)
+                            seen["mcap_milestones"] = sorted(list(seen_ms))
+                            save_seen(seen)
+                            ms_millions = ms // 1_000_000
+                            ms_notif = f"🪙 Nouveau palier atteint : <b>${ms_millions}M de Market Cap</b> ! 🚀"
+                            sent_ms = await client.send_message(channel, message=ms_notif, parse_mode='html')
+                            print(f"[Palier Mcap] Notification envoyée (#{sent_ms.id}) : ${ms_millions}M. Suppression dans 120s...", flush=True)
+                            asyncio.create_task(delete_after_delay(client, channel, sent_ms.id, 120))
+                except Exception as e:
+                    print(f"[Erreur check palier mcap] {e}", flush=True)
+
+            # 4. MODIFICATION DYNAMIQUE DES VOTES ET DÉPASSEMENT DE LEADER (toutes les 30s)
             if now - last_polls_check >= 30:
                 last_polls_check = now
                 polls_id = active_msgs.get("polls")
@@ -565,7 +683,40 @@ async def monitor_loop():
                         except Exception as e:
                             print(f"[Erreur edit votes] {e}", flush=True)
 
-            # 4. MODIFICATION DYNAMIQUE DES MIROIRS (toutes les 60s)
+                # Vérification de renversement de leader dans le vote
+                try:
+                    proc_poll = subprocess.run(["node", os.path.join(SCRIPT_DIR, "get_poll_data.js")], capture_output=True, text=True, timeout=10)
+                    poll_res = json.loads(proc_poll.stdout.strip())
+                    p_choices = poll_res.get("choices", [])
+                    if p_choices:
+                        leader_obj = max(p_choices, key=lambda c: c.get("pct", 0))
+                        current_lead = leader_obj.get("choice")
+                        last_lead = seen.get("last_poll_leader")
+                        if last_lead and current_lead != last_lead:
+                            print(f"\n[RENVERSEMENT DE VOTE] '{current_lead}' devance '{last_lead}' !", flush=True)
+                            screen_poll = await asyncio.to_thread(capture_screenshot, "poll")
+                            flip_lines = [
+                                "🗳️ <b>CHANGEMENT DE LEADER DANS LE VOTE GTA 6 !</b> 🗳️\n",
+                                f"🔥 <b>{current_lead}</b> vient de devancer <b>{last_lead}</b> !\n",
+                                "📊 <b>Nouveaux pourcentages :</b>"
+                            ]
+                            for c in p_choices:
+                                flip_lines.append(f"  ▫️ {c['choice']} : <b>{c['pct']:.1f}%</b>")
+                            flip_text = "\n".join(flip_lines)
+                            if screen_poll and os.path.exists(screen_poll):
+                                sent_flip = await client.send_file(channel, file=screen_poll, caption=flip_text, parse_mode='html')
+                            else:
+                                sent_flip = await client.send_message(channel, message=flip_text, parse_mode='html')
+                            asyncio.create_task(delete_after_delay(client, channel, sent_flip.id, 180))
+                            seen["last_poll_leader"] = current_lead
+                            save_seen(seen)
+                        elif not last_lead:
+                            seen["last_poll_leader"] = current_lead
+                            save_seen(seen)
+                except Exception as e:
+                    pass
+
+            # 5. MODIFICATION DYNAMIQUE DES MIROIRS (toutes les 60s)
             if now - last_mirrors_check >= 60:
                 last_mirrors_check = now
                 mirrors_id = active_msgs.get("mirrors")
@@ -580,6 +731,7 @@ async def monitor_loop():
                             last_mirrors_fp = mirrors_fp
                         except Exception as e:
                             print(f"[Erreur edit miroirs] {e}", flush=True)
+
 
             await asyncio.sleep(1.5)
         except Exception as e:
