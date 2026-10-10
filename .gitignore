@@ -44,3 +44,4 @@ config.json
 .env
 CONDITIONS_UTILISATION.md
 POLITIQUE_DE_CONFIDENTIALITE.md
+temp_chrome/

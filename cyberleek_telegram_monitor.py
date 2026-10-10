@@ -395,11 +395,13 @@ def translate_to_fr(text):
     if not text:
         return ""
     try:
-        url = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=fr&dt=t&q=" + urllib.parse.quote(text)
+        clean_text = text.replace('leek', 'leak').replace('Leek', 'Leak').replace('LEEK', 'LEAK')
+        url = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=fr&dt=t&q=" + urllib.parse.quote(clean_text)
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=6) as resp:
             data = json.loads(resp.read().decode('utf-8'))
             translated = ''.join([item[0] for item in data[0] if item[0]])
+            translated = translated.replace('poireau', 'fuite').replace('Poireau', 'Fuite').replace('POIREAU', 'FUITE')
             return translated
     except Exception as e:
         print(f"[Translation fallback] {e}", flush=True)

@@ -18,7 +18,6 @@ async function main() {
     '--disable-setuid-sandbox',
     '--disable-dev-shm-usage',
     '--disable-gpu',
-    '--single-process',
     '--hide-scrollbars',
     '--window-size=1280,900',
     '--ignore-certificate-errors',
