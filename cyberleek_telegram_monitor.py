@@ -381,20 +381,43 @@ async def delete_after_delay(client, channel, msg_id, delay=120):
     except Exception as e:
         print(f"[Erreur suppression notif] {e}", flush=True)
 
+def translate_to_fr(text):
+    if not text:
+        return ""
+    try:
+        url = "https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=fr&dt=t&q=" + urllib.parse.quote(text)
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+            translated = ''.join([item[0] for item in data[0] if item[0]])
+            return translated
+    except Exception as e:
+        print(f"[Translation fallback] {e}", flush=True)
+        return text
+
 async def send_announcement_alert(client, channel, ann):
     tz_fr = datetime.timezone(datetime.timedelta(hours=2))
-    dt_str = datetime.datetime.fromtimestamp(ann['timestamp'], tz=tz_fr).strftime("%d/%m/%Y à %H:%M")
+    dt_str = datetime.datetime.fromtimestamp(ann['timestamp'], tz=tz_fr).strftime("%d/%m/%Y à %H:%M (Paris)")
+    
+    title_en = ann.get('title', 'Sans Titre')
+    body_en = ann.get('body', '')
+    
+    title_fr = translate_to_fr(title_en)
+    body_fr = translate_to_fr(body_en)
     
     ann_lines = [
-        "📢 <b>NOUVELLE ANNONCE OFFICIELLE CYBERLEEK</b> 📢\n",
-        f"🎯 <b>Titre :</b> <code>{ann.get('title', 'Sans Titre')}</code>",
+        "📢 <b>NOUVELLE ANNONCE OFFICIELLE CYBERLEEK</b>\n",
+        f"🎯 <b>Titre :</b> <code>{title_fr}</code>",
+        f"🇬🇧 <i>(Titre original : {title_en})</i>",
         f"📅 <b>Date :</b> {dt_str}\n",
-        "📝 <b>Message :</b>",
-        f"<blockquote>{ann.get('body', '')}</blockquote>"
+        "🇫🇷 <b>Traduction Française (VF) :</b>",
+        f"<blockquote>{body_fr}</blockquote>\n",
+        "🇬🇧 <b>Version Originale (VO) :</b>",
+        f"<blockquote>{body_en}</blockquote>"
     ]
     ann_text = "\n".join(ann_lines)
     
-    print(f"\n[ANNONCE DÉTECTÉE] Publication de l'annonce '{ann.get('title')}'...", flush=True)
+    print(f"\n[ANNONCE DÉTECTÉE] Publication de l'annonce '{title_en}'...", flush=True)
     screen_path = await asyncio.to_thread(capture_screenshot, "anns")
     if screen_path and os.path.exists(screen_path):
         caption = ann_text + "\n\n📸 <i>Capture authentique de l'onglet Annonces</i>"
@@ -406,6 +429,7 @@ async def send_announcement_alert(client, channel, ann):
     else:
         await client.send_message(channel, message=ann_text, parse_mode='html')
     print("  -> Annonce envoyée avec succès sur Telegram !", flush=True)
+
 
 
 def format_mirrors_message():
@@ -662,8 +686,9 @@ async def monitor_loop():
                             ms_millions = ms // 1_000_000
                             ms_notif = f"🪙 Nouveau palier atteint : <b>${ms_millions}M de Market Cap</b> ! 🚀"
                             sent_ms = await client.send_message(channel, message=ms_notif, parse_mode='html')
-                            print(f"[Palier Mcap] Notification envoyée (#{sent_ms.id}) : ${ms_millions}M. Suppression dans 120s...", flush=True)
-                            asyncio.create_task(delete_after_delay(client, channel, sent_ms.id, 120))
+                            print(f"[Palier Mcap] Notification envoyée (#{sent_ms.id}) : ${ms_millions}M. Suppression dans 45s...", flush=True)
+                            asyncio.create_task(delete_after_delay(client, channel, sent_ms.id, 45))
+
                 except Exception as e:
                     print(f"[Erreur check palier mcap] {e}", flush=True)
 
