@@ -414,17 +414,10 @@ async def send_announcement_alert(client, channel, ann):
     title_en = ann.get('title', 'Sans Titre')
     body_en = ann.get('body', '')
     
-    title_fr = translate_to_fr(title_en)
-    body_fr = translate_to_fr(body_en)
-    
     ann_lines = [
         "📢 <b>NOUVELLE ANNONCE OFFICIELLE CYBERLEEK</b>\n",
-        f"🎯 <b>Titre :</b> <code>{title_fr}</code>",
-        f"🇬🇧 <i>(Titre original : {title_en})</i>",
+        f"🎯 <b>Titre :</b> <code>{title_en}</code>",
         f"📅 <b>Date :</b> {dt_str}\n",
-        "🇫🇷 <b>Traduction Française (VF) :</b>",
-        f"<blockquote>{body_fr}</blockquote>\n",
-        "🇬🇧 <b>Version Originale (VO) :</b>",
         f"<blockquote>{body_en}</blockquote>"
     ]
     ann_text = "\n".join(ann_lines)
