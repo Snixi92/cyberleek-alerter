@@ -383,7 +383,7 @@ def capture_screenshot(section="content", leak=None, past_leeks=None):
         print(f"[Screenshot Error] {e}", flush=True)
     return None
 
-async def delete_after_delay(client, channel, msg_id, delay=120):
+async def delete_after_delay(client, channel, msg_id, delay=15):
     await asyncio.sleep(delay)
     try:
         await client.delete_messages(channel, msg_id)
@@ -710,8 +710,8 @@ async def monitor_loop():
                             ms_millions = ms // 1_000_000
                             ms_notif = f"🪙 Nouveau palier atteint : <b>${ms_millions}M de Market Cap</b> ! 🚀"
                             sent_ms = await client.send_message(channel, message=ms_notif, parse_mode='html')
-                            print(f"[Palier Mcap] Notification envoyée (#{sent_ms.id}) : ${ms_millions}M. Suppression dans 45s...", flush=True)
-                            asyncio.create_task(delete_after_delay(client, channel, sent_ms.id, 45))
+                            print(f"[Palier Mcap] Notification envoyée (#{sent_ms.id}) : ${ms_millions}M. Suppression dans 15s...", flush=True)
+                            asyncio.create_task(delete_after_delay(client, channel, sent_ms.id, 15))
 
                 except Exception as e:
                     print(f"[Erreur check palier mcap] {e}", flush=True)
