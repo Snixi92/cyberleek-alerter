@@ -28,9 +28,7 @@
     "C939agbM8Z859tVxQAfBjKGJArH2WHtb3SnYS3hrE5oa"
   ],
   "last_poll_leader": "FREEROAM LUCIA (THIRD PERSON)",
-  "mcap_milestones": [
-    1000000
-  ],
+  "current_mcap_level": 4000000,
   "initialized": true,
   "active_msgs": {
     "mirrors": 97,

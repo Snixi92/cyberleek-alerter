@@ -689,22 +689,48 @@ async def monitor_loop():
                         except Exception as e:
                             print(f"[Erreur edit crypto] {e}", flush=True)
 
-                # Vérification des nouveaux paliers de Market Cap (notif éphémère de 120s)
+                # Vérification des changements de paliers de Market Cap (hausse ou baisse, notif éphémère de 15s)
                 try:
                     c_stats = get_crypto_stats()
                     c_mcap = c_stats.get("mcap", 0)
-                    seen_ms = set(seen.get("mcap_milestones", [1_000_000]))
                     mcap_steps = [1_000_000, 2_000_000, 3_000_000, 4_000_000, 5_000_000, 6_000_000, 7_000_000, 8_000_000, 9_000_000, 10_000_000, 15_000_000, 20_000_000, 25_000_000, 30_000_000]
-                    for ms in mcap_steps:
-                        if c_mcap >= ms and ms not in seen_ms:
-                            seen_ms.add(ms)
-                            seen["mcap_milestones"] = sorted(list(seen_ms))
-                            save_seen(seen)
-                            ms_millions = ms // 1_000_000
-                            ms_notif = f"🪙 Nouveau palier atteint : <b>${ms_millions}M de Market Cap</b> ! 🚀"
-                            sent_ms = await client.send_message(channel, message=ms_notif, parse_mode='html')
-                            print(f"[Palier Mcap] Notification envoyée (#{sent_ms.id}) : ${ms_millions}M. Suppression dans 15s...", flush=True)
-                            asyncio.create_task(delete_after_delay(client, channel, sent_ms.id, 15))
+                    
+                    # Déterminer le palier actuel atteint
+                    current_step = 0
+                    for s in mcap_steps:
+                        if c_mcap >= s:
+                            current_step = s
+                        else:
+                            break
+                            
+                    last_step = seen.get("current_mcap_level")
+                    if last_step is None:
+                        last_step = current_step
+                        seen["current_mcap_level"] = last_step
+                        save_seen(seen)
+                    
+                    # 1. NOUVEAU PALIER ATTEINT EN HAUSSE (Un seul message, même si plusieurs paliers sont franchis d'un coup)
+                    if current_step > last_step and current_step > 0:
+                        seen["current_mcap_level"] = current_step
+                        save_seen(seen)
+                        ms_millions = current_step // 1_000_000
+                        ms_notif = f"🪙 Nouveau palier atteint : <b>${ms_millions}M de Market Cap</b> ! 🚀"
+                        sent_ms = await client.send_message(channel, message=ms_notif, parse_mode='html')
+                        print(f"[Palier Mcap Hausse] Notification envoyée (#{sent_ms.id}) : ${ms_millions}M. Suppression dans 15s...", flush=True)
+                        asyncio.create_task(delete_after_delay(client, channel, sent_ms.id, 15))
+                        
+                    # 2. BAISSE DE PALIER (avec tampon de sécurité de 50k pour éviter les micro-oscillations)
+                    elif last_step > 0 and c_mcap < (last_step - 50_000):
+                        seen["current_mcap_level"] = current_step
+                        save_seen(seen)
+                        if current_step > 0:
+                            curr_millions = current_step // 1_000_000
+                            down_notif = f"🪙 Baisse de palier : <b>Retour à ${curr_millions}M de Market Cap</b> ! 🔻"
+                        else:
+                            down_notif = "🪙 Baisse de palier : <b>Passage sous les $1M de Market Cap</b> ! 🔻"
+                        sent_down = await client.send_message(channel, message=down_notif, parse_mode='html')
+                        print(f"[Palier Mcap Baisse] Notification envoyée (#{sent_down.id}) : Retour à ${current_step//1_000_000}M. Suppression dans 15s...", flush=True)
+                        asyncio.create_task(delete_after_delay(client, channel, sent_down.id, 15))
 
                 except Exception as e:
                     print(f"[Erreur check palier mcap] {e}", flush=True)
