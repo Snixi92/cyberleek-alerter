@@ -333,10 +333,17 @@ def format_mirrors_message():
     fingerprint = tuple((s, u) for s, u in mirrors)
     return "\n".join(mirror_lines), fingerprint
 
+def get_paris_now():
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.datetime.now(ZoneInfo("Europe/Paris"))
+    except Exception:
+        return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=2)))
+
 def format_crypto_message():
     crypto = get_crypto_stats()
     ch_sign = "+" if crypto["change24h"] >= 0 else ""
-    now_str = datetime.datetime.now(datetime.timezone.utc).strftime("%H:%M:%S UTC")
+    now_str = get_paris_now().strftime("%H:%M:%S (Paris)")
     crypto_lines = [
         "🪙 <b>STATUT DE LA CRYPTO $CYBERLEEK</b>\n",
         f"  • <b>Prix actuel :</b> <code>${crypto['price']:.6f}</code> ({ch_sign}{crypto['change24h']:.2f}% 24h)",
@@ -351,7 +358,7 @@ def format_polls_message():
     try:
         proc = subprocess.run(["node", os.path.join(SCRIPT_DIR, "get_poll_data.js")], capture_output=True, text=True, timeout=10)
         p = json.loads(proc.stdout.strip())
-        now_str = datetime.datetime.now(datetime.timezone.utc).strftime("%H:%M:%S UTC")
+        now_str = get_paris_now().strftime("%H:%M:%S (Paris)")
 
         poll_lines = [
             "📊 <b>TABLEAU DE BORD DES VOTES (MODE SILENCIEUX)</b>\n",
@@ -371,7 +378,9 @@ def format_polls_message():
         return "", None
 
 def format_leak_message(leak):
-    dt_str = datetime.datetime.fromtimestamp(leak['timestamp'], tz=datetime.timezone.utc).strftime("%d/%m/%Y à %H:%M UTC")
+    tz_fr = datetime.timezone(datetime.timedelta(hours=2))
+    dt_str = datetime.datetime.fromtimestamp(leak['timestamp'], tz=tz_fr).strftime("%d/%m/%Y à %H:%M")
+
     leak_lines = [
         "🚨 <b>NOUVEAU LEEK DÉTECTÉ (SOURCE CYBERLEEK)</b> 🚨\n",
         f"🎯 <b>Nom du leak :</b> <code>{leak.get('title', 'Sans Titre')}</code>",
