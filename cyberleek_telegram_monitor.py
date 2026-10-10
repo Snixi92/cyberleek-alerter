@@ -17,7 +17,8 @@ import urllib.error
 import ssl
 import subprocess
 import asyncio
-from telethon import TelegramClient, types
+from telethon import TelegramClient, types, errors
+from telethon.sessions import StringSession
 from telethon.errors import MessageNotModifiedError
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -28,6 +29,12 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.send_header('Content-type', 'text/plain; charset=utf-8')
         self.end_headers()
         self.wfile.write(b"CYBERLEEK MONITOR ONLINE 24/7 OK")
+
+    def do_HEAD(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain; charset=utf-8')
+        self.end_headers()
+
     def log_message(self, format, *args):
         pass
 
@@ -39,6 +46,7 @@ def start_health_server():
         server.serve_forever()
     except Exception as e:
         print(f"[HealthCheck Notice] {e}", flush=True)
+
 
 # Forcer UTF-8 sur Windows
 if sys.stdout.encoding != 'utf-8':
@@ -52,6 +60,8 @@ API_ID = int(os.environ.get("TELEGRAM_API_ID", "32755876"))
 API_HASH = os.environ.get("TELEGRAM_API_HASH", "d7c46be11bfc28c9825330b26310ceb0")
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8985354063:AAHp-c4YNe0YI9Is0IeplCgXmz0c-wYsxDg")
 CHANNEL_ID = int(os.environ.get("TELEGRAM_CHANNEL_ID", "-1003932229737"))
+SESSION_STRING = os.environ.get("TELEGRAM_SESSION", "1BJWap1sBu3dVfsNigHNfgX8P4b5AjEQPzXtxqF7tLGZEV7lX_m3EfXOBKCO9-VA984P359FGiq6p6BnGpjnU0AEfOnWfHcVH24IDl-X_xF1foAuCoZ3txp2VltKDox2vCQdYuMf6GK0t4fqbsJu4ahRKivvBgW2pqtm7adprnibfhCaP7W6iY3zOiXCTg440rbGAcNrX1IQTEyoGpbpKa5z0QZTCK00oj_rR8i7n3cfgDmhTVSkJNCJKZ54UDKe06LZJtF4djHLWZ2Sxm4XTWX113-wf_W1_sPUpb_G24RCdvPjEeSzA_Xi0Ycse_-GkurvOFof1a4ertKPkzjs6zahMy1aWn6M=")
+
 
 
 # Endpoints & Solana Protocol
@@ -592,14 +602,26 @@ async def send_telegram_alert(client, channel, leak, past_leeks=None):
     save_seen(seen)
 
 async def monitor_loop():
-    threading.Thread(target=start_health_server, daemon=True).start()
     print("=== DÉMARRAGE DU MONITOR CYBERLEEK AUTONOME ===", flush=True)
     seen = load_seen()
 
-    client = TelegramClient('monitor_session', API_ID, API_HASH)
-    await client.start(bot_token=BOT_TOKEN)
+    session = StringSession(SESSION_STRING)
+    client = TelegramClient(session, API_ID, API_HASH)
+    while True:
+        try:
+            await client.start(bot_token=BOT_TOKEN)
+            break
+        except Exception as e:
+            if isinstance(e, errors.FloodWaitError):
+                print(f"[Telegram FloodWait] Attente demandée par Telegram de {e.seconds}s...", flush=True)
+                await asyncio.sleep(e.seconds + 2)
+            else:
+                print(f"[Telegram Connexion] {e}. Réessai dans 10s...", flush=True)
+                await asyncio.sleep(10)
+
     channel = await client.get_entity(CHANNEL_ID)
     print(f"[Telegram] Connecté au canal: {channel.title} (ID: {channel.id})", flush=True)
+
 
     # Initialisation de base
     all_leeks = fetch_leeks()
@@ -764,4 +786,6 @@ async def monitor_loop():
             await asyncio.sleep(5)
 
 if __name__ == "__main__":
+    threading.Thread(target=start_health_server, daemon=True).start()
     asyncio.run(monitor_loop())
+
