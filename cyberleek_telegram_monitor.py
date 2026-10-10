@@ -360,10 +360,19 @@ def format_polls_message():
         p = json.loads(proc.stdout.strip())
         now_str = get_paris_now().strftime("%H:%M:%S (Paris)")
 
+        ends_at = p.get('ends_at')
+        if ends_at:
+            tz_fr = datetime.timezone(datetime.timedelta(hours=2))
+            end_dt = datetime.datetime.fromtimestamp(ends_at, tz=tz_fr)
+            end_str = end_dt.strftime("%d/%m/%Y à %H:%M")
+        else:
+            end_str = "Inconnue"
+
         poll_lines = [
             "📊 <b>TABLEAU DE BORD DES VOTES (MODE SILENCIEUX)</b>\n",
             f"🗳️ <b>Sujet :</b> {p['title']}",
-            f"⏳ <b>Statut :</b> <code>{p['status']}</code> | Fin dans : <code>{p['countdown']}</code>"
+            f"⏳ <b>Statut :</b> <code>{p['status']}</code>",
+            f"📅 <b>Fin du vote :</b> <code>{end_str}</code> (dans <code>{p['countdown']}</code>)"
         ]
         fingerprint = []
         for c in p["choices"]:
@@ -372,7 +381,8 @@ def format_polls_message():
 
         poll_lines.append("")
         poll_lines.append(f"<i>🔄 Mis à jour en direct : {now_str}</i>")
-        return "\n".join(poll_lines), (p['title'], p['status'], p['countdown'], tuple(fingerprint))
+        return "\n".join(poll_lines), (p['title'], p['status'], end_str, p['countdown'], tuple(fingerprint))
+
     except Exception as e:
         print(f"[Erreur format_polls_message] {e}", flush=True)
         return "", None
