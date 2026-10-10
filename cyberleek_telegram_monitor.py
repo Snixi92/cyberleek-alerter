@@ -507,7 +507,7 @@ def format_leak_message(leak):
     dt_str = datetime.datetime.fromtimestamp(leak['timestamp'], tz=tz_fr).strftime("%d/%m/%Y à %H:%M")
 
     leak_lines = [
-        "🚨 <b>NOUVEAU LEEK DÉTECTÉ (SOURCE CYBERLEEK)</b> 🚨\n",
+        "🚨 <b>NOUVEAU LEEK DÉTECTÉ</b> 🚨\n",
         f"🎯 <b>Nom du leak :</b> <code>{leak.get('title', 'Sans Titre')}</code>",
         f"📅 <b>Date :</b> {dt_str}\n",
         "📥 <b>Liens directs de téléchargement :</b>"
