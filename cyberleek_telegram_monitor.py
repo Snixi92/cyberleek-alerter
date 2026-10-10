@@ -192,25 +192,63 @@ def check_mirrors():
         results.append((status, u))
     return results
 
+last_known_crypto = {"price": 0.0027, "mcap": 1950000.0, "vol24h": 370000.0, "change24h": 0.0}
+
 def get_crypto_stats():
+    global last_known_crypto
+    # 1. GeckoTerminal (API Solana directe, pas de blocage)
+    try:
+        url = f"https://api.geckoterminal.com/api/v2/networks/solana/tokens/{TOKEN_ADDRESS}"
+        req = urllib.request.Request(url, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/json'
+        })
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = json.loads(resp.read().decode())
+        attr = data.get("data", {}).get("attributes", {})
+        price = float(attr.get("price_usd") or 0)
+        mcap = float(attr.get("fdv_usd") or attr.get("market_cap_usd") or 0)
+        vol24h = float(attr.get("volume_usd", {}).get("h24") or 0)
+        if price > 0:
+            last_known_crypto = {
+                "price": price,
+                "mcap": mcap,
+                "vol24h": vol24h,
+                "change24h": last_known_crypto.get("change24h", 0.0)
+            }
+            return last_known_crypto
+    except Exception as e:
+        pass
+
+    # 2. DexScreener fallback
     try:
         url = f"https://api.dexscreener.com/latest/dex/tokens/{TOKEN_ADDRESS}"
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        req = urllib.request.Request(url, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/json'
+        })
+        with urllib.request.urlopen(req, timeout=6) as resp:
             data = json.loads(resp.read().decode())
-        pair = data.get("pairs", [])[0]
-        price = float(pair.get("priceUsd", 0))
-        mcap = float(pair.get("marketCap") or pair.get("fdv", 0))
-        vol24h = float(pair.get("volume", {}).get("h24", 0))
-        change24h = float(pair.get("priceChange", {}).get("h24", 0))
-        return {
-            "price": price,
-            "mcap": mcap,
-            "vol24h": vol24h,
-            "change24h": change24h
-        }
-    except Exception:
-        return {"price": 0.0, "mcap": 0.0, "vol24h": 0.0, "change24h": 0.0}
+        pairs = data.get("pairs") or []
+        if pairs:
+            pair = pairs[0]
+            price = float(pair.get("priceUsd") or 0)
+            mcap = float(pair.get("marketCap") or pair.get("fdv") or 0)
+            vol24h = float(pair.get("volume", {}).get("h24") or 0)
+            change24h = float(pair.get("priceChange", {}).get("h24") or 0)
+            if price > 0:
+                last_known_crypto = {
+                    "price": price,
+                    "mcap": mcap,
+                    "vol24h": vol24h,
+                    "change24h": change24h
+                }
+                return last_known_crypto
+    except Exception as e:
+        pass
+
+    return last_known_crypto
+
 
 def get_polls():
     for _ in range(len(RPC_ENDPOINTS)):
