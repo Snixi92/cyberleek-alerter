@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.session
+*.session-journal
+*.session*
+.venv/
+venv/
+env/
+*.py
+!cyberleek_telegram_monitor.py
+
+# Node
+node_modules/
+npm-debug.log*
+*.js
+!take_real_screenshot.js
+!get_poll_data.js
+
+# Chrome profiles
+chrome_temp_profile/
+chrome_poll_profile/
+
+# Médias et fichiers temporaires
+*.mp4
+*.mkv
+*.avi
+*.jpg
+*.jpeg
+*.png
+split_frame_*
+*.html
+*.bat
+*.ico
+*.log
+
+# Caches et configs
+*.json
+!seen_leaks_tg.json
+!package.json
+!package-lock.json
+config.json
+.env
+CONDITIONS_UTILISATION.md
+POLITIQUE_DE_CONFIDENTIALITE.md

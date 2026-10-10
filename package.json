@@ -1,0 +1,9 @@
+{
+  "name": "cyberleek-alerter",
+  "version": "1.0.0",
+  "description": "Autonomous 24/7 Telegram alerter for Cyberleek",
+  "dependencies": {
+    "@solana/web3.js": "^1.99.0",
+    "ws": "^8.18.0"
+  }
+}
