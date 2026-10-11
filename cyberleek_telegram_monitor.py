@@ -30,18 +30,25 @@ from telethon.errors import MessageNotModifiedError
 from telethon.tl.functions.bots import SetBotCommandsRequest
 from telethon.tl.types import BotCommand, BotCommandScopeDefault
 import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 class HealthHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
     def do_GET(self):
+        body = b"CYBERLEEK MONITOR ONLINE 24/7 OK"
         self.send_response(200)
-        self.send_header('Content-type', 'text/plain; charset=utf-8')
+        self.send_header('Content-Type', 'text/plain; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Connection', 'close')
         self.end_headers()
-        self.wfile.write(b"CYBERLEEK MONITOR ONLINE 24/7 OK")
+        self.wfile.write(body)
 
     def do_HEAD(self):
         self.send_response(200)
-        self.send_header('Content-type', 'text/plain; charset=utf-8')
+        self.send_header('Content-Type', 'text/plain; charset=utf-8')
+        self.send_header('Content-Length', '32')
+        self.send_header('Connection', 'close')
         self.end_headers()
 
     def log_message(self, format, *args):
@@ -50,8 +57,8 @@ class HealthHandler(BaseHTTPRequestHandler):
 def start_health_server():
     port = int(os.environ.get("PORT", 10000))
     try:
-        server = HTTPServer(("0.0.0.0", port), HealthHandler)
-        print(f"[HealthCheck] Serveur HTTP actif sur le port {port} (pour Render / UptimeRobot)", flush=True)
+        server = ThreadingHTTPServer(("0.0.0.0", port), HealthHandler)
+        print(f"[HealthCheck] Serveur HTTP multithreadé actif sur le port {port} (pour Render / UptimeRobot)", flush=True)
         server.serve_forever()
     except Exception as e:
         print(f"[HealthCheck Notice] {e}", flush=True)
