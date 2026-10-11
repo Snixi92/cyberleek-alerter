@@ -480,6 +480,11 @@ def format_crypto_message():
     fingerprint = (round(crypto['price'], 6), round(crypto['mcap'], 0), round(crypto['vol24h'], 0), round(crypto['change24h'], 2))
     return "\n".join(crypto_lines), fingerprint
 
+def make_poll_bar(pct, length=10):
+    filled = max(0, min(length, round(pct / (100 / length))))
+    empty = length - filled
+    return "█" * filled + "░" * empty
+
 def format_polls_message():
     try:
         proc = subprocess.run(["node", os.path.join(SCRIPT_DIR, "get_poll_data.js")], capture_output=True, text=True, timeout=10)
@@ -498,14 +503,22 @@ def format_polls_message():
             "📊 <b>TABLEAU DE BORD DES VOTES (MODE SILENCIEUX)</b>\n",
             f"🗳️ <b>Sujet :</b> {p['title']}",
             f"⏳ <b>Statut :</b> <code>{p['status']}</code>",
-            f"📅 <b>Fin du vote :</b> <code>{end_str}</code> (dans <code>{p['countdown']}</code>)"
+            f"📅 <b>Fin du vote :</b> <code>{end_str}</code> (dans <code>{p['countdown']}</code>)\n"
         ]
-        fingerprint = []
-        for c in p["choices"]:
-            poll_lines.append(f"  ▫️ {c['choice']} : <b>{c['pct']:.1f}%</b>")
-            fingerprint.append((c['choice'], c['pct']))
 
-        poll_lines.append("")
+        choices = p.get("choices", [])
+        leader_choice = max(choices, key=lambda c: c.get("pct", 0)).get("choice") if choices else None
+
+        fingerprint = []
+        for c in choices:
+            ch_name = c.get("choice", "")
+            ch_pct = c.get("pct", 0.0)
+            crown = "👑 " if ch_name == leader_choice else ""
+            bar = make_poll_bar(ch_pct, length=10)
+            poll_lines.append(f"{crown}<b>{ch_name}</b>")
+            poll_lines.append(f"<code>{bar} {ch_pct:.1f}%</code>\n")
+            fingerprint.append((ch_name, ch_pct))
+
         poll_lines.append(f"<i>🔄 Mis à jour en direct : {now_str}</i>")
         return "\n".join(poll_lines), (p['title'], p['status'], end_str, p['countdown'], tuple(fingerprint))
 
@@ -1274,10 +1287,15 @@ async def monitor_loop():
                             flip_lines = [
                                 "🗳️ <b>CHANGEMENT DE LEADER DANS LE VOTE GTA 6 !</b> 🗳️\n",
                                 f"🔥 <b>{current_lead}</b> vient de devancer <b>{last_lead}</b> !\n",
-                                "📊 <b>Nouveaux pourcentages :</b>"
+                                "📊 <b>Nouveaux résultats :</b>\n"
                             ]
                             for c in p_choices:
-                                flip_lines.append(f"  ▫️ {c['choice']} : <b>{c['pct']:.1f}%</b>")
+                                ch_name = c.get("choice", "")
+                                ch_pct = c.get("pct", 0.0)
+                                crown = "👑 " if ch_name == current_lead else ""
+                                bar = make_poll_bar(ch_pct, length=10)
+                                flip_lines.append(f"{crown}<b>{ch_name}</b>")
+                                flip_lines.append(f"<code>{bar} {ch_pct:.1f}%</code>\n")
                             flip_text = "\n".join(flip_lines)
                             sent_flip = await client.send_message(channel, message=flip_text, parse_mode='html')
                             asyncio.create_task(delete_after_delay(client, channel, sent_flip.id, 180))
