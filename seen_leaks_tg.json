@@ -33,12 +33,12 @@
   "mcap_min_threshold": 7000000,
   "mcap_muted": false,
   "pending_deletions": [],
-  "last_channel_msg_id": 935,
+  "last_channel_msg_id": 945,
   "initialized": true,
   "active_msgs": {
-    "mirrors": 97,
-    "crypto": 98,
-    "polls": 99,
-    "leak": 102
+    "mirrors": 938,
+    "crypto": 939,
+    "polls": 940,
+    "leak": 944
   }
 }

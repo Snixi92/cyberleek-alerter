@@ -76,7 +76,7 @@ API_ID = int(os.environ.get("TELEGRAM_API_ID", "32755876"))
 API_HASH = os.environ.get("TELEGRAM_API_HASH", "d7c46be11bfc28c9825330b26310ceb0")
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8985354063:AAHp-c4YNe0YI9Is0IeplCgXmz0c-wYsxDg")
 CHANNEL_ID = int(os.environ.get("TELEGRAM_CHANNEL_ID", "-1003932229737"))
-SESSION_STRING = os.environ.get("TELEGRAM_SESSION", "1BJWap1sBu3dVfsNigHNfgX8P4b5AjEQPzXtxqF7tLGZEV7lX_m3EfXOBKCO9-VA984P359FGiq6p6BnGpjnU0AEfOnWfHcVH24IDl-X_xF1foAuCoZ3txp2VltKDox2vCQdYuMf6GK0t4fqbsJu4ahRKivvBgW2pqtm7adprnibfhCaP7W6iY3zOiXCTg440rbGAcNrX1IQTEyoGpbpKa5z0QZTCK00oj_rR8i7n3cfgDmhTVSkJNCJKZ54UDKe06LZJtF4djHLWZ2Sxm4XTWX113-wf_W1_sPUpb_G24RCdvPjEeSzA_Xi0Ycse_-GkurvOFof1a4ertKPkzjs6zahMy1aWn6M=")
+SESSION_STRING = os.environ.get("TELEGRAM_SESSION", "")
 
 
 
@@ -1061,7 +1061,7 @@ async def monitor_loop():
     print("=== DÉMARRAGE DU MONITOR CYBERLEEK AUTONOME ===", flush=True)
     seen = load_seen()
 
-    session = StringSession(SESSION_STRING)
+    session = StringSession(SESSION_STRING) if SESSION_STRING else StringSession()
     client = TelegramClient(session, API_ID, API_HASH)
     while True:
         try:
