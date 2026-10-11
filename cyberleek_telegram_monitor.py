@@ -483,7 +483,7 @@ def format_crypto_message():
 def make_poll_bar(pct, length=20):
     filled = max(0, min(length, round(pct / (100 / length))))
     empty = length - filled
-    return "█" * filled + "░" * empty
+    return "█" * filled + "━" * empty
 
 def format_polls_message():
     try:
