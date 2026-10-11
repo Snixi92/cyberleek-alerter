@@ -599,7 +599,7 @@ async def process_and_send_leak_media(client, channel, leak, reply_to_id=None, a
     dans notre base de données locale 'saved_leaks' et envoie le tout sur Telegram avec 100% de la
     qualité d'origine (bit par bit, sans aucune compression via force_document=True).
     Si auto_delete_delay est spécifié (pour les commandes comme /leaks), les fichiers envoyés s'auto-suppriment
-    après ce délai (180s) pour préserver la propreté du chat.
+    après ce délai (60s) pour préserver la propreté du chat.
     """
     title = leak.get("title", "Leak")
     pubkey = leak.get("pubkey", "unknown")
@@ -979,7 +979,7 @@ async def monitor_loop():
         if '@' in cmd:
             cmd = cmd.split('@')[0]
 
-        async def reply_and_auto_delete(msg_text, delay=180):
+        async def reply_and_auto_delete(msg_text, delay=60):
             try:
                 rep = await event.reply(msg_text, parse_mode='html')
                 asyncio.create_task(delete_after_delay(client, event.chat_id, rep.id, delay))
@@ -1001,7 +1001,7 @@ async def monitor_loop():
                     "  • 📢 /announcements - Dernière annonce officielle Cyberleek\n"
                     "  • ⚙️ /mcap - Configurer ou rendre muettes les alertes Market Cap\n"
                     "  • ℹ️ /help - Afficher ce menu d'aide\n\n"
-                    "⏱️ <i>Toutes les réponses de commandes s'auto-suppriment après 3 minutes pour préserver l'ordre du chat.</i>"
+                    "⏱️ <i>Toutes les réponses de commandes s'auto-suppriment après 1 minute pour préserver l'ordre du chat.</i>"
                 )
                 await reply_and_auto_delete(help_text)
 
@@ -1019,14 +1019,14 @@ async def monitor_loop():
                     all_l.sort(key=lambda x: x.get('timestamp', 0))
                     latest_leak = all_l[-1]
                     l_text = format_leak_message(latest_leak)
-                    rep = await reply_and_auto_delete(l_text, delay=180)
+                    rep = await reply_and_auto_delete(l_text, delay=60)
                     asyncio.create_task(
                         process_and_send_leak_media(
                             client,
                             event.chat_id,
                             latest_leak,
                             reply_to_id=rep.id,
-                            auto_delete_delay=180
+                            auto_delete_delay=60
                         )
                     )
                 else:
