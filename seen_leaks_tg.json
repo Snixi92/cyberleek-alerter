@@ -34,7 +34,6 @@
     "mirrors": 97,
     "crypto": 98,
     "polls": 99,
-    "leak": 102,
-    "screen": 103
+    "leak": 102
   }
 }

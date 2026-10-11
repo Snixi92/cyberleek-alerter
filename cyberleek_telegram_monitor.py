@@ -14,12 +14,19 @@ import struct
 import datetime
 import urllib.request
 import urllib.error
+import urllib.parse
 import ssl
 import subprocess
 import asyncio
-from telethon import TelegramClient, types, errors
+import tempfile
+import shutil
+import zipfile
+import re
+from telethon import TelegramClient, types, errors, events
 from telethon.sessions import StringSession
 from telethon.errors import MessageNotModifiedError
+from telethon.tl.functions.bots import SetBotCommandsRequest
+from telethon.tl.types import BotCommand, BotCommandScopeDefault
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
@@ -522,6 +529,163 @@ def format_leak_message(leak):
         leak_lines.append("  • <i>Aucun lien direct</i>")
     return "\n".join(leak_lines)
 
+async def process_and_send_leak_media(client, channel, leak, reply_to_id=None):
+    """
+    Télécharge le fichier original du leak depuis les miroirs décentralisés (Arweave en priorité),
+    extrait la vidéo sans compression si c'est un ZIP avec mot de passe, et envoie le tout
+    sur Telegram avec 100% de la qualité d'origine (bit par bit, sans aucune compression).
+    """
+    items = leak.get("items", [])
+    if not items:
+        return
+
+    candidate_urls = []
+    for it in items:
+        u = it.get("url", "").strip()
+        if not u:
+            continue
+        u_lower = u.lower()
+        if any(gw in u_lower for gw in ["arweave.net", "vilenarios.com", "turbo-gateway.com", "ar.io", "permaweb.app"]):
+            candidate_urls.insert(0, u)
+        elif any(u_lower.endswith(ext) for ext in [".mp4", ".zip", ".png", ".jpg", ".mkv", ".webm"]):
+            candidate_urls.insert(0, u)
+        else:
+            candidate_urls.append(u)
+
+    if not candidate_urls:
+        return
+
+    tmp_dir = tempfile.mkdtemp(prefix="cyberleek_leak_dl_")
+    downloaded_file = None
+    title = leak.get("title", "Leak")
+
+    try:
+        print(f"\n[Media Leak] Recherche & téléchargement pour : '{title}'...", flush=True)
+        for u in candidate_urls:
+            try:
+                parsed_path = urllib.parse.urlparse(u).path
+                base_name = os.path.basename(parsed_path) or "leak_file.bin"
+                if base_name.endswith(".html"):
+                    base_name = base_name[:-5]
+                dest = os.path.join(tmp_dir, base_name)
+
+                print(f"[Media Leak] Essai de téléchargement depuis : {u}", flush=True)
+                req = urllib.request.Request(u, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+                with urllib.request.urlopen(req, timeout=45) as resp, open(dest, 'wb') as f_out:
+                    shutil.copyfileobj(resp, f_out)
+
+                if os.path.exists(dest) and os.path.getsize(dest) > 1024:
+                    downloaded_file = dest
+                    file_size_mb = os.path.getsize(dest) / (1024 * 1024)
+                    print(f"[Media Leak] Téléchargement réussi ({file_size_mb:.2f} Mo) !", flush=True)
+                    break
+            except Exception as e_dl:
+                print(f"[Media Leak] Échec sur ce miroir : {e_dl}", flush=True)
+
+        if not downloaded_file:
+            print("[Media Leak] Aucun fichier n'a pu être téléchargé depuis les miroirs.", flush=True)
+            return
+
+        is_zip = False
+        try:
+            with open(downloaded_file, 'rb') as f_check:
+                header = f_check.read(4)
+                if header.startswith(b'PK\x03\x04'):
+                    is_zip = True
+        except Exception:
+            pass
+
+        if is_zip or downloaded_file.lower().endswith('.zip'):
+            pwd_match = re.search(r'(?:zip\s+)?password\s*:\s*([^\s,]+)', title, re.IGNORECASE)
+            pwd = pwd_match.group(1) if pwd_match else None
+            pwd_bytes = pwd.encode('utf-8') if pwd else None
+
+            extracted_dir = os.path.join(tmp_dir, "extracted")
+            os.makedirs(extracted_dir, exist_ok=True)
+            media_extracted = None
+
+            try:
+                with zipfile.ZipFile(downloaded_file, 'r') as zf:
+                    if pwd_bytes:
+                        zf.setpassword(pwd_bytes)
+                    zf.extractall(extracted_dir)
+            except Exception as e_zf:
+                print(f"[Media Leak] zipfile natif ({e_zf}), essai avec outils système (7z/unzip)...", flush=True)
+                if pwd:
+                    subprocess.run(["7z", "x", f"-p{pwd}", f"-o{extracted_dir}", downloaded_file], capture_output=True)
+                    subprocess.run(["unzip", "-P", pwd, downloaded_file, "-d", extracted_dir], capture_output=True)
+                else:
+                    subprocess.run(["7z", "x", f"-o{extracted_dir}", downloaded_file], capture_output=True)
+                    subprocess.run(["unzip", downloaded_file, "-d", extracted_dir], capture_output=True)
+
+            for root, _, files in os.walk(extracted_dir):
+                for f in sorted(files):
+                    if any(f.lower().endswith(ext) for ext in [".mp4", ".mkv", ".mov", ".webm", ".avi", ".png", ".jpg"]):
+                        media_extracted = os.path.join(root, f)
+                        break
+                if media_extracted:
+                    break
+
+            if media_extracted and os.path.exists(media_extracted):
+                med_size_mb = os.path.getsize(media_extracted) / (1024 * 1024)
+                vid_cap = (
+                    f"🎬 <b>Vidéo originale décompressée</b> : <code>{title}</code>\n"
+                    f"📁 <i>Fichier : {os.path.basename(media_extracted)} ({med_size_mb:.2f} Mo)</i>\n"
+                    f"✨ <i>Qualité 100% brute d'origine (sans compression)</i>"
+                )
+                print(f"[Media Leak] Envoi de la vidéo extraite sur Telegram...", flush=True)
+                await client.send_file(
+                    channel,
+                    file=media_extracted,
+                    caption=vid_cap,
+                    parse_mode='html',
+                    force_document=True,
+                    reply_to=reply_to_id
+                )
+                print("[Media Leak] Vidéo envoyée avec succès !", flush=True)
+
+            zip_size_mb = os.path.getsize(downloaded_file) / (1024 * 1024)
+            zip_cap = (
+                f"📦 <b>Archive .ZIP originale du leak</b>\n"
+                f"📁 <i>Nom : {os.path.basename(downloaded_file)} ({zip_size_mb:.2f} Mo)</i>"
+            )
+            if pwd:
+                zip_cap += f"\n🔑 <i>Mot de passe de l'archive :</i> <code>{pwd}</code>"
+            print(f"[Media Leak] Envoi de l'archive .ZIP originale sur Telegram...", flush=True)
+            await client.send_file(
+                channel,
+                file=downloaded_file,
+                caption=zip_cap,
+                parse_mode='html',
+                force_document=True,
+                reply_to=reply_to_id
+            )
+            print("[Media Leak] Archive .ZIP envoyée avec succès !", flush=True)
+
+        else:
+            raw_size_mb = os.path.getsize(downloaded_file) / (1024 * 1024)
+            file_cap = (
+                f"🎬 <b>Fichier original du leak</b> : <code>{title}</code>\n"
+                f"📁 <i>Fichier : {os.path.basename(downloaded_file)} ({raw_size_mb:.2f} Mo)</i>\n"
+                f"✨ <i>Qualité 100% brute d'origine (sans compression)</i>"
+            )
+            print(f"[Media Leak] Envoi du fichier brut sur Telegram...", flush=True)
+            await client.send_file(
+                channel,
+                file=downloaded_file,
+                caption=file_cap,
+                parse_mode='html',
+                force_document=True,
+                reply_to=reply_to_id
+            )
+            print("[Media Leak] Fichier original envoyé avec succès !", flush=True)
+
+    except Exception as e_proc:
+        print(f"[Erreur globale media leak] {e_proc}", flush=True)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        print("[Media Leak] Espace temporaire nettoyé.", flush=True)
+
 async def send_telegram_alert(client, channel, leak, past_leeks=None):
     seen = load_seen()
     active_msgs = seen.get("active_msgs", {})
@@ -569,30 +733,11 @@ async def send_telegram_alert(client, channel, leak, past_leeks=None):
     except Exception as e:
         print(f"[Erreur envoi leak] {e}", flush=True)
 
-    # 3. SCREENSHOT AUTHENTIQUE DU SITE (Section ■ LEEKS, suit immédiatement le leak)
-    msg_screen = None
-    try:
-        screen_path = await asyncio.to_thread(capture_screenshot, leak, past_leeks)
-        if screen_path and os.path.exists(screen_path):
-            screen_caption = (
-                "📸 <b>Capture d'écran authentique du site (Section ■ LEEKS)</b>\n"
-                f"🌐 <i>Source : https://cyberleek.saiph.weavegate.net/</i>"
-            )
-            msg_screen = await client.send_file(
-                entity=channel,
-                file=screen_path,
-                caption=screen_caption,
-                parse_mode='html',
-                reply_to=msg_leak.id if msg_leak else None
-            )
-            print(f"[Screenshot authentique envoyé en suivi] ID: {msg_screen.id}", flush=True)
-    except Exception as e:
-        print(f"[Erreur envoi screenshot] {e}", flush=True)
-
+    # 3. TÉLÉCHARGEMENT DIRECT ET ENVOI DE LA VIDÉO / DU FICHIER ORIGINAL (ET DU .ZIP)
     if msg_leak:
         active_msgs["leak"] = msg_leak.id
-    if msg_screen:
-        active_msgs["screen"] = msg_screen.id
+        asyncio.create_task(process_and_send_leak_media(client, channel, leak, reply_to_id=msg_leak.id))
+
     seen["active_msgs"] = active_msgs
     save_seen(seen)
 
@@ -616,6 +761,91 @@ async def monitor_loop():
 
     channel = await client.get_entity(CHANNEL_ID)
     print(f"[Telegram] Connecté au canal: {channel.title} (ID: {channel.id})", flush=True)
+
+    # 1. Enregistrement du menu officiel des commandes Telegram
+    try:
+        await client(SetBotCommandsRequest(
+            scope=BotCommandScopeDefault(),
+            lang_code='fr',
+            commands=[
+                BotCommand(command='help', description="Afficher l'aide et la liste des commandes"),
+                BotCommand(command='crypto', description="Prix et Market Cap de $CYBERLEEK"),
+                BotCommand(command='votes', description="Résultats du sondage GTA 6 en direct"),
+                BotCommand(command='leaks', description="Dernier leak officiel Cyberleek"),
+                BotCommand(command='mirrors', description="Statut des miroirs du site"),
+                BotCommand(command='announcements', description="Dernière annonce officielle")
+            ]
+        ))
+        print("[Telegram] Menu officiel des commandes configuré avec succès !", flush=True)
+    except Exception as e_cmd:
+        print(f"[Telegram Notice] Configuration commandes : {e_cmd}", flush=True)
+
+    # 2. Gestionnaire interactif pour répondre à toutes les commandes
+    @client.on(events.NewMessage)
+    async def handle_bot_commands(event):
+        if not event.text:
+            return
+        raw = event.raw_text.strip()
+        if not raw.startswith('/'):
+            return
+        cmd = raw.split()[0].lower()
+        if '@' in cmd:
+            cmd = cmd.split('@')[0]
+
+        try:
+            if cmd in ['/start', '/help']:
+                help_text = (
+                    "🤖 <b>CYBERLEEK ALERTER BOT</b> 🤖\n\n"
+                    "Surveillance autonome 24h/24 du site Cyberleek et de la blockchain Solana.\n\n"
+                    "📌 <b>Commandes disponibles :</b>\n"
+                    "  • 🪙 /crypto - Cours, Market Cap et volume du token $CYBERLEEK\n"
+                    "  • 📊 /votes - Résultats du sondage officiel GTA 6 et date de fin\n"
+                    "  • 🚨 /leaks - Dernier leak officiel détecté avec liens directs\n"
+                    "  • 🌐 /mirrors - Statut en direct des miroirs actifs du site\n"
+                    "  • 📢 /announcements - Dernière annonce officielle Cyberleek\n"
+                    "  • ℹ️ /help - Afficher ce menu d'aide"
+                )
+                await event.reply(help_text, parse_mode='html')
+
+            elif cmd in ['/crypto', '/price']:
+                c_text, _ = format_crypto_message()
+                await event.reply(c_text, parse_mode='html')
+
+            elif cmd in ['/votes', '/poll', '/polls']:
+                p_text, _ = format_polls_message()
+                await event.reply(p_text, parse_mode='html')
+
+            elif cmd in ['/leaks', '/lastleak', '/leak']:
+                all_l = fetch_leeks()
+                if all_l:
+                    l_text = format_leak_message(all_l[-1])
+                    await event.reply(l_text, parse_mode='html')
+                else:
+                    await event.reply("Aucun leak détecté pour le moment.")
+
+            elif cmd in ['/mirrors', '/status']:
+                m_text, _ = format_mirrors_message()
+                await event.reply(m_text, parse_mode='html')
+
+            elif cmd in ['/announcements', '/anns', '/news']:
+                anns = fetch_announcements()
+                if anns:
+                    last_a = anns[-1]
+                    tz_fr = datetime.timezone(datetime.timedelta(hours=2))
+                    dt_str = datetime.datetime.fromtimestamp(last_a['timestamp'], tz=tz_fr).strftime("%d/%m/%Y à %H:%M (Paris)")
+                    t_en = last_a.get('title', 'Sans Titre')
+                    b_en = last_a.get('body', '')
+                    a_lines = [
+                        "📢 <b>DERNIÈRE ANNONCE OFFICIELLE CYBERLEEK</b>\n",
+                        f"🎯 <b>Titre :</b> <code>{t_en}</code>",
+                        f"📅 <b>Date :</b> {dt_str}\n",
+                        f"<blockquote>{b_en}</blockquote>"
+                    ]
+                    await event.reply("\n".join(a_lines), parse_mode='html')
+                else:
+                    await event.reply("Aucune annonce officielle disponible pour le moment.")
+        except Exception as e_h:
+            print(f"[Erreur commande {cmd}] {e_h}", flush=True)
 
 
     # Initialisation de base
@@ -761,8 +991,6 @@ async def monitor_loop():
                         current_lead = leader_obj.get("choice")
                         last_lead = seen.get("last_poll_leader")
                         if last_lead and current_lead != last_lead:
-                            print(f"\n[RENVERSEMENT DE VOTE] '{current_lead}' devance '{last_lead}' !", flush=True)
-                            screen_poll = await asyncio.to_thread(capture_screenshot, "poll")
                             flip_lines = [
                                 "🗳️ <b>CHANGEMENT DE LEADER DANS LE VOTE GTA 6 !</b> 🗳️\n",
                                 f"🔥 <b>{current_lead}</b> vient de devancer <b>{last_lead}</b> !\n",
@@ -771,10 +999,7 @@ async def monitor_loop():
                             for c in p_choices:
                                 flip_lines.append(f"  ▫️ {c['choice']} : <b>{c['pct']:.1f}%</b>")
                             flip_text = "\n".join(flip_lines)
-                            if screen_poll and os.path.exists(screen_poll):
-                                sent_flip = await client.send_file(channel, file=screen_poll, caption=flip_text, parse_mode='html')
-                            else:
-                                sent_flip = await client.send_message(channel, message=flip_text, parse_mode='html')
+                            sent_flip = await client.send_message(channel, message=flip_text, parse_mode='html')
                             asyncio.create_task(delete_after_delay(client, channel, sent_flip.id, 180))
                             seen["last_poll_leader"] = current_lead
                             save_seen(seen)

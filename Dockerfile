@@ -11,6 +11,8 @@ RUN apt-get update && apt-get install -y \
     nodejs \
     fonts-liberation \
     libnss3 \
+    p7zip-full \
+    unzip \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
