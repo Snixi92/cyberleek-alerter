@@ -553,12 +553,12 @@ async def send_announcement_alert(client, channel, ann):
     print(f"\n[ANNONCE DÉTECTÉE] Publication de l'annonce '{title_en}'...", flush=True)
     screen_path = await asyncio.to_thread(capture_screenshot, "anns")
     if screen_path and os.path.exists(screen_path):
-        caption = ann_text + "\n\n📸 <i>Capture authentique de l'onglet Annonces</i>"
+        caption = ann_text
         if len(caption) <= 1024:
             await client.send_file(channel, file=screen_path, caption=caption, parse_mode='html')
         else:
             msg_ann = await client.send_message(channel, message=ann_text, parse_mode='html')
-            await client.send_file(channel, file=screen_path, caption="📸 <b>Capture d'écran de l'onglet Annonces</b>", parse_mode='html', reply_to=msg_ann.id)
+            await client.send_file(channel, file=screen_path, parse_mode='html', reply_to=msg_ann.id)
     else:
         await client.send_message(channel, message=ann_text, parse_mode='html')
     print("  -> Annonce envoyée avec succès sur Telegram !", flush=True)
