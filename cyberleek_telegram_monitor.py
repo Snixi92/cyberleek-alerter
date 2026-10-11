@@ -980,15 +980,20 @@ async def monitor_loop():
     except Exception as e_cmd:
         print(f"[Telegram Notice] Configuration commandes : {e_cmd}", flush=True)
 
-    # 2. Gestionnaire interactif pour répondre à toutes les commandes (Auto-suppression après 3 min)
+    # 2. Gestionnaire interactif pour répondre à toutes les commandes (Auto-suppression après 1 min)
     @client.on(events.NewMessage)
     async def handle_bot_commands(event):
-        if not event.text:
-            return
-        raw = event.raw_text.strip()
+        raw = (event.raw_text or event.text or "").strip()
         if not raw.startswith('/'):
             return
-        cmd = raw.split()[0].lower()
+
+        # Normaliser les commandes avec espaces (ex: '/ mcap 7M', '/  crypto', etc.)
+        clean_after_slash = raw[1:].lstrip()
+        if not clean_after_slash:
+            return
+        norm_raw = '/' + clean_after_slash
+        parts = norm_raw.split()
+        cmd = parts[0].lower()
         if '@' in cmd:
             cmd = cmd.split('@')[0]
 
@@ -1069,65 +1074,89 @@ async def monitor_loop():
                     await reply_and_auto_delete("Aucune annonce officielle disponible pour le moment.")
 
             elif cmd in ['/mcap', '/marketcap']:
-                parts = raw.split()
-                sub = parts[1].lower() if len(parts) > 1 else ""
-                num_match = re.search(r'(\d+)', raw)
-                num = int(num_match.group(1)) if num_match else None
-
+                args_str = " ".join(parts[1:]).strip().lower()
                 current_seen = load_seen()
 
-                if sub in ['mute', 'off', 'silence', 'desactiver', 'désactiver'] and not num:
+                # 1. Mute / Silence complet
+                if args_str in ['mute', 'off', 'silence', 'silencieux', 'desactiver', 'désactiver', 'couper', 'stop']:
                     current_seen["mcap_muted"] = True
                     save_seen(current_seen)
                     resp_text = (
                         "🔇 <b>Alertes Market Cap désactivées (Mode Muet)</b>\n\n"
                         "Le bot n'enverra plus aucune notification de palier de Market Cap.\n"
-                        "💡 <i>Pour réactiver :</i> <code>/mcap on</code> <i>ou définir un seuil avec</i> <code>/mcap 10M</code>."
+                        "💡 <i>Pour réactiver :</i> <code>/mcap on</code> <i>ou définir un seuil avec</i> <code>/mcap 7M</code>."
                     )
-                    await reply_and_auto_delete(resp_text)
+                    await reply_and_auto_delete(resp_text, delay=60)
 
-                elif sub in ['on', 'unmute', 'enable', 'activer', 'reset']:
+                # 2. Réactiver toutes les alertes (seuil remis à 0)
+                elif args_str in ['on', 'unmute', 'enable', 'activer', 'reset']:
                     current_seen["mcap_muted"] = False
                     current_seen["mcap_min_threshold"] = 0
                     save_seen(current_seen)
                     resp_text = (
                         "🔔 <b>Alertes Market Cap réactivées</b>\n\n"
                         "Le bot notifiera chaque palier standard ($1M, $2M, $3M...) en hausse et en baisse.\n"
-                        "💡 <i>Pour désactiver en dessous d'un montant :</i> <code>/mcap 10M</code>"
+                        "💡 <i>Pour filtrer en dessous d'un montant :</i> <code>/mcap 7M</code>"
                     )
-                    await reply_and_auto_delete(resp_text)
+                    await reply_and_auto_delete(resp_text, delay=60)
 
-                elif num is not None:
-                    thresh_val = num * 1_000_000
-                    current_seen["mcap_muted"] = False
-                    current_seen["mcap_min_threshold"] = thresh_val
-                    save_seen(current_seen)
-                    resp_text = (
-                        f"🎯 <b>Seuil Market Cap configuré : ${num}M</b>\n\n"
-                        f"Les alertes de Market Cap sont désormais <b>désactivées en dessous de ${num}M</b>.\n"
-                        f"Le bot restera muet et ne notifiera qu'à partir du palier des <b>${num}M de Market Cap</b> !"
-                    )
-                    await reply_and_auto_delete(resp_text)
-
+                # 3. Chiffre ou montant spécifié (ex: 7M, 7m, 7 M, 7, 7.5M, 10M, 0)
                 else:
-                    is_muted = current_seen.get("mcap_muted", False)
-                    min_t = current_seen.get("mcap_min_threshold", 0) // 1_000_000
-                    if is_muted:
-                        st_desc = "🔇 <b>Mode Muet activé</b> (Aucune alerte de palier envoyée)"
-                    elif min_t > 0:
-                        st_desc = f"🎯 <b>Seuil actif</b> (Désactivé sous ${min_t}M, notifications dès ${min_t}M)"
-                    else:
-                        st_desc = "🔔 <b>Actif standard</b> (Alertes pour tous les paliers $1M, $2M, $3M...)"
+                    num_match = re.search(r'(\d+(?:[\.,]\d+)?)', args_str)
+                    if num_match:
+                        raw_num = float(num_match.group(1).replace(',', '.'))
+                        if raw_num <= 0:
+                            current_seen["mcap_muted"] = False
+                            current_seen["mcap_min_threshold"] = 0
+                            save_seen(current_seen)
+                            resp_text = (
+                                "🔔 <b>Seuil réinitialisé (Tous les paliers actifs)</b>\n\n"
+                                "Le bot notifiera tous les paliers standard ($1M, $2M, $3M...).\n"
+                                "💡 <i>Pour filtrer en dessous d'un montant :</i> <code>/mcap 7M</code>"
+                            )
+                            await reply_and_auto_delete(resp_text, delay=60)
+                        else:
+                            if raw_num >= 100_000:
+                                thresh_val = int(raw_num)
+                                display_m = round(thresh_val / 1_000_000, 2)
+                            else:
+                                thresh_val = int(raw_num * 1_000_000)
+                                display_m = int(raw_num) if raw_num.is_integer() else raw_num
 
-                    status_text = (
-                        "🪙 <b>CONFIGURATION DES ALERTES MARKET CAP</b>\n\n"
-                        f"• <b>Statut actuel :</b> {st_desc}\n\n"
-                        "💡 <b>Options d'utilisation :</b>\n"
-                        "  • <code>/mcap mute</code> : Couper complètement les alertes\n"
-                        "  • <code>/mcap on</code> : Réactiver toutes les alertes standard\n"
-                        "  • <code>/mcap 10M</code> (ou <code>/mcap 5M</code>) : Désactiver en dessous de X millions"
-                    )
-                    await reply_and_auto_delete(status_text)
+                            current_seen["mcap_muted"] = False
+                            current_seen["mcap_min_threshold"] = thresh_val
+                            save_seen(current_seen)
+                            resp_text = (
+                                f"🎯 <b>Seuil Market Cap configuré : ${display_m}M</b>\n\n"
+                                f"✅ Les alertes sont désormais <b>désactivées en dessous de ${display_m}M</b>.\n"
+                                f"Le bot restera silencieux et n'enverra de notifications qu'à partir de <b>${display_m}M de Market Cap</b> !"
+                            )
+                            await reply_and_auto_delete(resp_text, delay=60)
+
+                    # 4. Aucun argument valide -> Statut actuel et instructions
+                    else:
+                        is_muted = current_seen.get("mcap_muted", False)
+                        min_t_raw = current_seen.get("mcap_min_threshold", 0)
+                        min_t_m = min_t_raw / 1_000_000
+                        display_cur_m = int(min_t_m) if min_t_m.is_integer() else min_t_m
+
+                        if is_muted:
+                            st_desc = "🔇 <b>Mode Muet activé</b> (Aucune alerte de palier envoyée)"
+                        elif min_t_raw > 0:
+                            st_desc = f"🎯 <b>Seuil actif : ${display_cur_m}M</b> (Désactivé sous ${display_cur_m}M, notifications dès ${display_cur_m}M)"
+                        else:
+                            st_desc = "🔔 <b>Actif standard</b> (Alertes pour tous les paliers $1M, $2M, $3M...)"
+
+                        status_text = (
+                            "🪙 <b>CONFIGURATION DES ALERTES MARKET CAP</b>\n\n"
+                            f"• <b>Statut actuel :</b> {st_desc}\n\n"
+                            "💡 <b>Commandes disponibles :</b>\n"
+                            "  • <code>/mcap 7M</code> : Couper les alertes en dessous de 7 Millions\n"
+                            "  • <code>/mcap mute</code> : Couper complètement toutes les alertes\n"
+                            "  • <code>/mcap on</code> : Réactiver tous les paliers standards\n\n"
+                            "<i>Note : Les commandes avec espace (ex: <code>/ mcap 7M</code>) sont également supportées.</i>"
+                        )
+                        await reply_and_auto_delete(status_text, delay=60)
 
         except Exception as e_h:
             print(f"[Erreur commande {cmd}] {e_h}", flush=True)
@@ -1234,7 +1263,8 @@ async def monitor_loop():
                         if current_step > last_step and current_step > 0:
                             current_seen["current_mcap_level"] = current_step
                             save_seen(current_seen)
-                            if current_step >= min_thresh:
+                            should_alert_up = (min_thresh == 0 and current_step > 0) or (min_thresh > 0 and current_step >= min_thresh)
+                            if should_alert_up:
                                 ms_millions = current_step // 1_000_000
                                 ms_notif = f"🪙 Nouveau palier atteint : <b>${ms_millions}M de Market Cap</b> ! 🚀"
                                 sent_ms = await client.send_message(channel, message=ms_notif, parse_mode='html')
@@ -1245,7 +1275,8 @@ async def monitor_loop():
                         elif last_step > 0 and c_mcap < (last_step - 50_000):
                             current_seen["current_mcap_level"] = current_step
                             save_seen(current_seen)
-                            if current_step >= min_thresh:
+                            should_alert_down = (min_thresh == 0) or (min_thresh > 0 and current_step >= min_thresh and current_step > 0)
+                            if should_alert_down:
                                 if current_step > 0:
                                     curr_millions = current_step // 1_000_000
                                     down_notif = f"🪙 Baisse de palier : <b>Retour à ${curr_millions}M de Market Cap</b> ! 🔻"

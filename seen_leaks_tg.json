@@ -30,6 +30,8 @@
   ],
   "last_poll_leader": "Thanks daddy",
   "current_mcap_level": 4000000,
+  "mcap_min_threshold": 7000000,
+  "mcap_muted": false,
   "initialized": true,
   "active_msgs": {
     "mirrors": 97,
