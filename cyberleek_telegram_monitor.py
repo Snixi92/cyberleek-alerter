@@ -773,14 +773,15 @@ async def monitor_loop():
                 BotCommand(command='votes', description="Résultats du sondage GTA 6 en direct"),
                 BotCommand(command='leaks', description="Dernier leak officiel Cyberleek"),
                 BotCommand(command='mirrors', description="Statut des miroirs du site"),
-                BotCommand(command='announcements', description="Dernière annonce officielle")
+                BotCommand(command='announcements', description="Dernière annonce officielle"),
+                BotCommand(command='mcap', description="Muter ou configurer le seuil d'alerte Market Cap")
             ]
         ))
         print("[Telegram] Menu officiel des commandes configuré avec succès !", flush=True)
     except Exception as e_cmd:
         print(f"[Telegram Notice] Configuration commandes : {e_cmd}", flush=True)
 
-    # 2. Gestionnaire interactif pour répondre à toutes les commandes
+    # 2. Gestionnaire interactif pour répondre à toutes les commandes (Auto-suppression après 3 min)
     @client.on(events.NewMessage)
     async def handle_bot_commands(event):
         if not event.text:
@@ -791,6 +792,15 @@ async def monitor_loop():
         cmd = raw.split()[0].lower()
         if '@' in cmd:
             cmd = cmd.split('@')[0]
+
+        async def reply_and_auto_delete(msg_text, delay=180):
+            try:
+                rep = await event.reply(msg_text, parse_mode='html')
+                asyncio.create_task(delete_after_delay(client, event.chat_id, rep.id, delay))
+                asyncio.create_task(delete_after_delay(client, event.chat_id, event.id, delay))
+                return rep
+            except Exception as e_rep:
+                print(f"[Erreur envoi/auto-delete réponse] {e_rep}", flush=True)
 
         try:
             if cmd in ['/start', '/help']:
@@ -803,29 +813,31 @@ async def monitor_loop():
                     "  • 🚨 /leaks - Dernier leak officiel détecté avec liens directs\n"
                     "  • 🌐 /mirrors - Statut en direct des miroirs actifs du site\n"
                     "  • 📢 /announcements - Dernière annonce officielle Cyberleek\n"
-                    "  • ℹ️ /help - Afficher ce menu d'aide"
+                    "  • ⚙️ /mcap - Configurer ou rendre muettes les alertes Market Cap\n"
+                    "  • ℹ️ /help - Afficher ce menu d'aide\n\n"
+                    "⏱️ <i>Toutes les réponses de commandes s'auto-suppriment après 3 minutes pour préserver l'ordre du chat.</i>"
                 )
-                await event.reply(help_text, parse_mode='html')
+                await reply_and_auto_delete(help_text)
 
             elif cmd in ['/crypto', '/price']:
                 c_text, _ = format_crypto_message()
-                await event.reply(c_text, parse_mode='html')
+                await reply_and_auto_delete(c_text)
 
             elif cmd in ['/votes', '/poll', '/polls']:
                 p_text, _ = format_polls_message()
-                await event.reply(p_text, parse_mode='html')
+                await reply_and_auto_delete(p_text)
 
             elif cmd in ['/leaks', '/lastleak', '/leak']:
                 all_l = fetch_leeks()
                 if all_l:
                     l_text = format_leak_message(all_l[-1])
-                    await event.reply(l_text, parse_mode='html')
+                    await reply_and_auto_delete(l_text)
                 else:
-                    await event.reply("Aucun leak détecté pour le moment.")
+                    await reply_and_auto_delete("Aucun leak détecté pour le moment.")
 
             elif cmd in ['/mirrors', '/status']:
                 m_text, _ = format_mirrors_message()
-                await event.reply(m_text, parse_mode='html')
+                await reply_and_auto_delete(m_text)
 
             elif cmd in ['/announcements', '/anns', '/news']:
                 anns = fetch_announcements()
@@ -841,9 +853,71 @@ async def monitor_loop():
                         f"📅 <b>Date :</b> {dt_str}\n",
                         f"<blockquote>{b_en}</blockquote>"
                     ]
-                    await event.reply("\n".join(a_lines), parse_mode='html')
+                    await reply_and_auto_delete("\n".join(a_lines))
                 else:
-                    await event.reply("Aucune annonce officielle disponible pour le moment.")
+                    await reply_and_auto_delete("Aucune annonce officielle disponible pour le moment.")
+
+            elif cmd in ['/mcap', '/marketcap']:
+                parts = raw.split()
+                sub = parts[1].lower() if len(parts) > 1 else ""
+                num_match = re.search(r'(\d+)', raw)
+                num = int(num_match.group(1)) if num_match else None
+
+                current_seen = load_seen()
+
+                if sub in ['mute', 'off', 'silence', 'desactiver', 'désactiver'] and not num:
+                    current_seen["mcap_muted"] = True
+                    save_seen(current_seen)
+                    resp_text = (
+                        "🔇 <b>Alertes Market Cap désactivées (Mode Muet)</b>\n\n"
+                        "Le bot n'enverra plus aucune notification de palier de Market Cap.\n"
+                        "💡 <i>Pour réactiver :</i> <code>/mcap on</code> <i>ou définir un seuil avec</i> <code>/mcap 10M</code>."
+                    )
+                    await reply_and_auto_delete(resp_text)
+
+                elif sub in ['on', 'unmute', 'enable', 'activer', 'reset']:
+                    current_seen["mcap_muted"] = False
+                    current_seen["mcap_min_threshold"] = 0
+                    save_seen(current_seen)
+                    resp_text = (
+                        "🔔 <b>Alertes Market Cap réactivées</b>\n\n"
+                        "Le bot notifiera chaque palier standard ($1M, $2M, $3M...) en hausse et en baisse.\n"
+                        "💡 <i>Pour désactiver en dessous d'un montant :</i> <code>/mcap 10M</code>"
+                    )
+                    await reply_and_auto_delete(resp_text)
+
+                elif num is not None:
+                    thresh_val = num * 1_000_000
+                    current_seen["mcap_muted"] = False
+                    current_seen["mcap_min_threshold"] = thresh_val
+                    save_seen(current_seen)
+                    resp_text = (
+                        f"🎯 <b>Seuil Market Cap configuré : ${num}M</b>\n\n"
+                        f"Les alertes de Market Cap sont désormais <b>désactivées en dessous de ${num}M</b>.\n"
+                        f"Le bot restera muet et ne notifiera qu'à partir du palier des <b>${num}M de Market Cap</b> !"
+                    )
+                    await reply_and_auto_delete(resp_text)
+
+                else:
+                    is_muted = current_seen.get("mcap_muted", False)
+                    min_t = current_seen.get("mcap_min_threshold", 0) // 1_000_000
+                    if is_muted:
+                        st_desc = "🔇 <b>Mode Muet activé</b> (Aucune alerte de palier envoyée)"
+                    elif min_t > 0:
+                        st_desc = f"🎯 <b>Seuil actif</b> (Désactivé sous ${min_t}M, notifications dès ${min_t}M)"
+                    else:
+                        st_desc = "🔔 <b>Actif standard</b> (Alertes pour tous les paliers $1M, $2M, $3M...)"
+
+                    status_text = (
+                        "🪙 <b>CONFIGURATION DES ALERTES MARKET CAP</b>\n\n"
+                        f"• <b>Statut actuel :</b> {st_desc}\n\n"
+                        "💡 <b>Options d'utilisation :</b>\n"
+                        "  • <code>/mcap mute</code> : Couper complètement les alertes\n"
+                        "  • <code>/mcap on</code> : Réactiver toutes les alertes standard\n"
+                        "  • <code>/mcap 10M</code> (ou <code>/mcap 5M</code>) : Désactiver en dessous de X millions"
+                    )
+                    await reply_and_auto_delete(status_text)
+
         except Exception as e_h:
             print(f"[Erreur commande {cmd}] {e_h}", flush=True)
 
@@ -919,48 +993,56 @@ async def monitor_loop():
                         except Exception as e:
                             print(f"[Erreur edit crypto] {e}", flush=True)
 
-                # Vérification des changements de paliers de Market Cap (hausse ou baisse, notif éphémère de 15s)
+                # Vérification des changements de paliers de Market Cap (hausse ou baisse, notif éphémère de 45s)
                 try:
-                    c_stats = get_crypto_stats()
-                    c_mcap = c_stats.get("mcap", 0)
-                    mcap_steps = [1_000_000, 2_000_000, 3_000_000, 4_000_000, 5_000_000, 6_000_000, 7_000_000, 8_000_000, 9_000_000, 10_000_000, 15_000_000, 20_000_000, 25_000_000, 30_000_000]
-                    
-                    # Déterminer le palier actuel atteint
-                    current_step = 0
-                    for s in mcap_steps:
-                        if c_mcap >= s:
-                            current_step = s
-                        else:
-                            break
-                            
-                    last_step = seen.get("current_mcap_level")
-                    if last_step is None:
-                        last_step = current_step
-                        seen["current_mcap_level"] = last_step
-                        save_seen(seen)
-                    
-                    # 1. NOUVEAU PALIER ATTEINT EN HAUSSE (Un seul message, même si plusieurs paliers sont franchis d'un coup)
-                    if current_step > last_step and current_step > 0:
-                        seen["current_mcap_level"] = current_step
-                        save_seen(seen)
-                        ms_millions = current_step // 1_000_000
-                        ms_notif = f"🪙 Nouveau palier atteint : <b>${ms_millions}M de Market Cap</b> ! 🚀"
-                        sent_ms = await client.send_message(channel, message=ms_notif, parse_mode='html')
-                        print(f"[Palier Mcap Hausse] Notification envoyée (#{sent_ms.id}) : ${ms_millions}M. Suppression dans 45s...", flush=True)
-                        asyncio.create_task(delete_after_delay(client, channel, sent_ms.id, 45))
+                    current_seen = load_seen()
+                    # Si le mode muet est activé, ne pas envoyer de notification
+                    if current_seen.get("mcap_muted", False):
+                        pass
+                    else:
+                        min_thresh = current_seen.get("mcap_min_threshold", 0)
+                        c_stats = get_crypto_stats()
+                        c_mcap = c_stats.get("mcap", 0)
+                        mcap_steps = [1_000_000, 2_000_000, 3_000_000, 4_000_000, 5_000_000, 6_000_000, 7_000_000, 8_000_000, 9_000_000, 10_000_000, 15_000_000, 20_000_000, 25_000_000, 30_000_000]
                         
-                    # 2. BAISSE DE PALIER (avec tampon de sécurité de 50k pour éviter les micro-oscillations)
-                    elif last_step > 0 and c_mcap < (last_step - 50_000):
-                        seen["current_mcap_level"] = current_step
-                        save_seen(seen)
-                        if current_step > 0:
-                            curr_millions = current_step // 1_000_000
-                            down_notif = f"🪙 Baisse de palier : <b>Retour à ${curr_millions}M de Market Cap</b> ! 🔻"
-                        else:
-                            down_notif = "🪙 Baisse de palier : <b>Passage sous les $1M de Market Cap</b> ! 🔻"
-                        sent_down = await client.send_message(channel, message=down_notif, parse_mode='html')
-                        print(f"[Palier Mcap Baisse] Notification envoyée (#{sent_down.id}) : Retour à ${current_step//1_000_000}M. Suppression dans 45s...", flush=True)
-                        asyncio.create_task(delete_after_delay(client, channel, sent_down.id, 45))
+                        # Déterminer le palier actuel atteint
+                        current_step = 0
+                        for s in mcap_steps:
+                            if c_mcap >= s:
+                                current_step = s
+                            else:
+                                break
+                                
+                        last_step = current_seen.get("current_mcap_level")
+                        if last_step is None:
+                            last_step = current_step
+                            current_seen["current_mcap_level"] = last_step
+                            save_seen(current_seen)
+                        
+                        # 1. NOUVEAU PALIER ATTEINT EN HAUSSE (Uniquement si >= seuil minimum)
+                        if current_step > last_step and current_step > 0:
+                            current_seen["current_mcap_level"] = current_step
+                            save_seen(current_seen)
+                            if current_step >= min_thresh:
+                                ms_millions = current_step // 1_000_000
+                                ms_notif = f"🪙 Nouveau palier atteint : <b>${ms_millions}M de Market Cap</b> ! 🚀"
+                                sent_ms = await client.send_message(channel, message=ms_notif, parse_mode='html')
+                                print(f"[Palier Mcap Hausse] Notification envoyée (#{sent_ms.id}) : ${ms_millions}M. Suppression dans 45s...", flush=True)
+                                asyncio.create_task(delete_after_delay(client, channel, sent_ms.id, 45))
+                            
+                        # 2. BAISSE DE PALIER (Uniquement si >= seuil minimum)
+                        elif last_step > 0 and c_mcap < (last_step - 50_000):
+                            current_seen["current_mcap_level"] = current_step
+                            save_seen(current_seen)
+                            if current_step >= min_thresh:
+                                if current_step > 0:
+                                    curr_millions = current_step // 1_000_000
+                                    down_notif = f"🪙 Baisse de palier : <b>Retour à ${curr_millions}M de Market Cap</b> ! 🔻"
+                                else:
+                                    down_notif = "🪙 Baisse de palier : <b>Passage sous les $1M de Market Cap</b> ! 🔻"
+                                sent_down = await client.send_message(channel, message=down_notif, parse_mode='html')
+                                print(f"[Palier Mcap Baisse] Notification envoyée (#{sent_down.id}) : Retour à ${current_step//1_000_000}M. Suppression dans 45s...", flush=True)
+                                asyncio.create_task(delete_after_delay(client, channel, sent_down.id, 45))
 
                 except Exception as e:
                     print(f"[Erreur check palier mcap] {e}", flush=True)
