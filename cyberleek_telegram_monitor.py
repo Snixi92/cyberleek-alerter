@@ -502,8 +502,8 @@ def format_polls_message():
         poll_lines = [
             "📊 <b>TABLEAU DE BORD DES VOTES (MODE SILENCIEUX)</b>\n",
             f"🗳️ <b>Sujet :</b> {p['title']}",
-            f"⏳ <b>Statut :</b> <code>{p['status']}</code>",
-            f"📅 <b>Fin du vote :</b> <code>{end_str}</code> (dans <code>{p['countdown']}</code>)\n"
+            f"⏳ <b>Statut :</b> {p['status']}",
+            f"📅 <b>Fin du vote :</b> {end_str} (dans {p['countdown']})\n"
         ]
 
         choices = p.get("choices", [])
@@ -516,7 +516,7 @@ def format_polls_message():
             crown = "👑 " if ch_name == leader_choice else ""
             bar = make_poll_bar(ch_pct, length=20)
             poll_lines.append(f"{crown}<b>{ch_name}</b>")
-            poll_lines.append(f"<code>{bar} {ch_pct:.1f}%</code>\n")
+            poll_lines.append(f"{bar} {ch_pct:.1f}%\n")
             fingerprint.append((ch_name, ch_pct))
 
         poll_lines.append(f"<i>🔄 Mis à jour en direct : {now_str}</i>")
@@ -1295,7 +1295,7 @@ async def monitor_loop():
                                 crown = "👑 " if ch_name == current_lead else ""
                                 bar = make_poll_bar(ch_pct, length=20)
                                 flip_lines.append(f"{crown}<b>{ch_name}</b>")
-                                flip_lines.append(f"<code>{bar} {ch_pct:.1f}%</code>\n")
+                                flip_lines.append(f"{bar} {ch_pct:.1f}%\n")
                             flip_text = "\n".join(flip_lines)
                             sent_flip = await client.send_message(channel, message=flip_text, parse_mode='html')
                             asyncio.create_task(delete_after_delay(client, channel, sent_flip.id, 180))
