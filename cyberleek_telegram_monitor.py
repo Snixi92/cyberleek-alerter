@@ -394,13 +394,123 @@ def capture_screenshot(section="content", leak=None, past_leeks=None):
         print(f"[Screenshot Error] {e}", flush=True)
     return None
 
+def update_last_channel_id(msg_id):
+    try:
+        if not msg_id: return
+        current_seen = load_seen()
+        cur_max = current_seen.get("last_channel_msg_id", 0)
+        if msg_id > cur_max:
+            current_seen["last_channel_msg_id"] = msg_id
+            save_seen(current_seen)
+    except Exception:
+        pass
+
+def register_pending_deletion(chat_id, msg_id, delay):
+    try:
+        current_seen = load_seen()
+        if "pending_deletions" not in current_seen:
+            current_seen["pending_deletions"] = []
+        cid = getattr(chat_id, "id", chat_id)
+        current_seen["pending_deletions"].append({
+            "chat_id": cid,
+            "msg_id": msg_id,
+            "delete_at": time.time() + delay
+        })
+        save_seen(current_seen)
+    except Exception as e:
+        print(f"[Register Pending Deletion Notice] {e}", flush=True)
+
+def remove_pending_deletion(msg_id):
+    try:
+        current_seen = load_seen()
+        if "pending_deletions" in current_seen:
+            current_seen["pending_deletions"] = [p for p in current_seen["pending_deletions"] if p.get("msg_id") != msg_id]
+            save_seen(current_seen)
+    except Exception:
+        pass
+
 async def delete_after_delay(client, channel, msg_id, delay=45):
+    register_pending_deletion(channel, msg_id, delay)
+    update_last_channel_id(msg_id)
     await asyncio.sleep(delay)
     try:
-        await client.delete_messages(channel, msg_id)
-        print(f"[Éphémère] Notification #{msg_id} supprimée après {delay}s pour préserver l'ordre du canal.", flush=True)
+        target_entity = channel
+        if isinstance(channel, int):
+            try:
+                target_entity = await client.get_entity(channel)
+            except Exception:
+                target_entity = channel
+        await client.delete_messages(target_entity, msg_id)
+        print(f"[Éphémère] Notification #{msg_id} supprimée après {delay}s.", flush=True)
     except Exception as e:
-        print(f"[Erreur suppression notif] {e}", flush=True)
+        print(f"[Erreur suppression notif #{msg_id}] {e}", flush=True)
+    finally:
+        remove_pending_deletion(msg_id)
+
+async def process_pending_deletions(client, channel_entity):
+    try:
+        current_seen = load_seen()
+        pending = current_seen.get("pending_deletions", [])
+        if not pending:
+            return
+        now = time.time()
+        to_delete = [p for p in pending if now >= p.get("delete_at", 0)]
+        if not to_delete:
+            return
+
+        remaining = [p for p in pending if now < p.get("delete_at", 0)]
+        for p in to_delete:
+            cid = p.get("chat_id")
+            mid = p.get("msg_id")
+            try:
+                if cid == CHANNEL_ID or cid == getattr(channel_entity, "id", None):
+                    target = channel_entity
+                elif isinstance(cid, int):
+                    target = await client.get_entity(cid)
+                else:
+                    target = cid
+                await client.delete_messages(target, mid)
+                print(f"[Persistance] Nettoyage réussi du message orphelin #{mid}.", flush=True)
+            except Exception:
+                pass
+
+        current_seen["pending_deletions"] = remaining
+        save_seen(current_seen)
+    except Exception as e:
+        print(f"[Erreur process_pending_deletions] {e}", flush=True)
+
+async def sanitize_channel(client, channel):
+    try:
+        current_seen = load_seen()
+        active_ids = set(current_seen.get("active_msgs", {}).values())
+        last_id = max(current_seen.get("last_channel_msg_id", 935), max(active_ids) if active_ids else 935)
+        ids_to_check = list(range(max(1, last_id - 40), last_id + 5))
+        msgs = await client.get_messages(channel, ids=ids_to_check)
+        now = time.time()
+        to_del = []
+        for m in msgs:
+            if not m:
+                continue
+            if m.id in active_ids:
+                continue
+            if m.media:
+                continue
+            txt = (m.raw_text or '').strip()
+            age = now - m.date.timestamp()
+            if txt.startswith('/'):
+                to_del.append(m.id)
+            elif any(txt.startswith(p) for p in ['🎯 Seuil Market Cap', '🤖 CYBERLEEK ALERTER BOT', '🔇 Alertes Market Cap', '🔔 Alertes Market Cap']):
+                to_del.append(m.id)
+            elif any(txt.startswith(p) for p in ['🪙 Nouveau palier atteint', '🪙 Baisse de palier']) and age > 50:
+                to_del.append(m.id)
+            elif txt.startswith('🗳️ CHANGEMENT DE LEADER') and age > 190:
+                to_del.append(m.id)
+
+        if to_del:
+            await client.delete_messages(channel, to_del)
+            print(f"[Sanitizer Canal] Suppression réussie de {len(to_del)} messages orphelins : {to_del}", flush=True)
+    except Exception as e:
+        print(f"[Sanitizer Canal Notice] {e}", flush=True)
 
 def translate_to_fr(text):
     if not text:
@@ -1000,8 +1110,9 @@ async def monitor_loop():
         async def reply_and_auto_delete(msg_text, delay=60):
             try:
                 rep = await event.reply(msg_text, parse_mode='html')
-                asyncio.create_task(delete_after_delay(client, event.chat_id, rep.id, delay))
-                asyncio.create_task(delete_after_delay(client, event.chat_id, event.id, delay))
+                target = channel if event.chat_id == CHANNEL_ID else event.chat_id
+                asyncio.create_task(delete_after_delay(client, target, rep.id, delay))
+                asyncio.create_task(delete_after_delay(client, target, event.id, delay))
                 return rep
             except Exception as e_rep:
                 print(f"[Erreur envoi/auto-delete réponse] {e_rep}", flush=True)
@@ -1182,6 +1293,7 @@ async def monitor_loop():
     last_crypto_check = 0
     last_polls_check = 0
     last_mirrors_check = 0
+    last_sanitize_check = 0
     
     last_crypto_fp = None
     last_polls_fp = None
@@ -1190,6 +1302,9 @@ async def monitor_loop():
     while True:
         try:
             now = time.time()
+
+            # 0. GESTION PERSISTANTE DES SUPPRESSIONS ÉPHÉMÈRES (toutes les 1.5s)
+            await process_pending_deletions(client, channel)
 
             # 1. DÉTECTION ON-CHAIN ULTRA-RAPIDE (toutes les 1.5s)
             # 1. DÉTECTION ON-CHAIN DES LEAKS (toutes les 1.5s)
@@ -1354,6 +1469,10 @@ async def monitor_loop():
                         except Exception as e:
                             print(f"[Erreur edit miroirs] {e}", flush=True)
 
+            # 6. BALAYAGE DE SÉCURITÉ DU CANAL (toutes les 60s)
+            if now - last_sanitize_check >= 60:
+                last_sanitize_check = now
+                await sanitize_channel(client, channel)
 
             await asyncio.sleep(1.5)
         except Exception as e:
