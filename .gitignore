@@ -23,6 +23,8 @@ chrome_temp_profile/
 chrome_poll_profile/
 
 # Médias et fichiers temporaires
+saved_leaks/
+*.zip
 *.mp4
 *.mkv
 *.avi

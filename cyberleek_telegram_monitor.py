@@ -22,6 +22,8 @@ import tempfile
 import shutil
 import zipfile
 import re
+import http.cookiejar
+import zlib
 from telethon import TelegramClient, types, errors, events
 from telethon.sessions import StringSession
 from telethon.errors import MessageNotModifiedError
@@ -97,6 +99,8 @@ MIRRORS = [
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SEEN_FILE = os.path.join(SCRIPT_DIR, "seen_leaks_tg.json")
+STORAGE_DIR = os.path.join(SCRIPT_DIR, "saved_leaks")
+os.makedirs(STORAGE_DIR, exist_ok=True)
 CHROME_PATH = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
 SCREENSHOT_PATH = os.path.join(SCRIPT_DIR, "live_leak_screenshot.png")
 
@@ -529,14 +533,150 @@ def format_leak_message(leak):
         leak_lines.append("  • <i>Aucun lien direct</i>")
     return "\n".join(leak_lines)
 
-async def process_and_send_leak_media(client, channel, leak, reply_to_id=None):
+def download_bedrive(url, dest):
     """
-    Télécharge le fichier original du leak depuis les miroirs décentralisés (Arweave en priorité),
-    extrait la vidéo sans compression si c'est un ZIP avec mot de passe, et envoie le tout
-    sur Telegram avec 100% de la qualité d'origine (bit par bit, sans aucune compression).
+    Contourne automatiquement l'antibot de Bedrive.ru (résolution automatique
+    du captcha couleur base64 et soumission du formulaire) pour télécharger le fichier.
     """
+    try:
+        ctx = ssl._create_unverified_context()
+        cj = http.cookiejar.CookieJar()
+        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj), urllib.request.HTTPSHandler(context=ctx))
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        }
+        req = urllib.request.Request(url, headers=headers)
+        resp = opener.open(req, timeout=20)
+        html = resp.read().decode('utf-8', errors='replace')
+        if "antibot" in html or "Button()" in html:
+            inputs = dict(re.findall(r'name=\\?"([^\\"]+)\\?" type=\\?"hidden\\?" value=\\?"([^\\"]*)\\?"', html))
+            img_match = re.search(r'data:image/png;base64,([A-Za-z0-9+/=]+)', html)
+            if img_match and inputs:
+                raw_png = base64.b64decode(img_match.group(1))
+                idat_idx = raw_png.find(b'IDAT')
+                chunk_len = int.from_bytes(raw_png[idat_idx-4:idat_idx], 'big')
+                decomp = zlib.decompress(raw_png[idat_idx+4:idat_idx+4+chunk_len])
+                r, g, b = decomp[1], decomp[2], decomp[3]
+                if r < 60 and g < 60 and b < 60:
+                    color = "BLACK"
+                elif r > 180 and g > 180 and b < 100:
+                    color = "YELLOW"
+                elif r > 180 and g < 100 and b < 100:
+                    color = "RED"
+                elif g > 150 and r < 100:
+                    color = "GREEN"
+                elif b > 150 and r < 100:
+                    color = "BLUE"
+                else:
+                    color = "GRAY"
+                post_data = inputs.copy()
+                post_data['color'] = color
+                post_req = urllib.request.Request(
+                    url,
+                    data=urllib.parse.urlencode(post_data).encode('utf-8'),
+                    headers={**headers, 'Content-Type': 'application/x-www-form-urlencoded', 'Origin': 'https://bedrive.ru', 'Referer': url}
+                )
+                opener.open(post_req, timeout=20)
+                file_req = urllib.request.Request(url, headers=headers)
+                with opener.open(file_req, timeout=60) as file_resp, open(dest, 'wb') as f_out:
+                    shutil.copyfileobj(file_resp, f_out)
+                if os.path.exists(dest) and os.path.getsize(dest) > 1024:
+                    return True
+        else:
+            with open(dest, 'wb') as f_out:
+                f_out.write(html.encode('utf-8'))
+            if os.path.exists(dest) and os.path.getsize(dest) > 1024:
+                return True
+    except Exception as e:
+        print(f"[Bedrive Downloader Notice] {e}", flush=True)
+    return False
+
+async def process_and_send_leak_media(client, channel, leak, reply_to_id=None, auto_delete_delay=None):
+    """
+    Télécharge le fichier original du leak depuis les miroirs décentralisés (Arweave, Bedrive, etc.),
+    extrait la vidéo sans compression si c'est un ZIP avec mot de passe, archive les fichiers
+    dans notre base de données locale 'saved_leaks' et envoie le tout sur Telegram avec 100% de la
+    qualité d'origine (bit par bit, sans aucune compression via force_document=True).
+    Si auto_delete_delay est spécifié (pour les commandes comme /leaks), les fichiers envoyés s'auto-suppriment
+    après ce délai (180s) pour préserver la propreté du chat.
+    """
+    title = leak.get("title", "Leak")
+    pubkey = leak.get("pubkey", "unknown")
+    leak_dir = os.path.join(STORAGE_DIR, pubkey)
+    os.makedirs(leak_dir, exist_ok=True)
+
+    pwd_match = re.search(r'(?:zip\s+)?password\s*:\s*([^\s,]+)', title, re.IGNORECASE)
+    pwd = pwd_match.group(1) if pwd_match else None
+
+    # 1. Vérification si les fichiers sont déjà archivés dans notre base de données locale
+    saved_video = None
+    saved_zip = None
+    for root, _, files in os.walk(leak_dir):
+        for f in sorted(files):
+            full_p = os.path.join(root, f)
+            if any(f.lower().endswith(ext) for ext in [".mp4", ".mkv", ".mov", ".webm", ".avi"]):
+                if not saved_video:
+                    saved_video = full_p
+            elif f.lower().endswith(".zip"):
+                if not saved_zip:
+                    saved_zip = full_p
+
+    # Si nous avons déjà les fichiers en base locale, les envoyer directement !
+    if saved_video or saved_zip:
+        print(f"[Media Leak] Fichiers trouvés dans la base locale pour '{title}'. Envoi direct...", flush=True)
+        try:
+            if saved_video and os.path.exists(saved_video):
+                med_size_mb = os.path.getsize(saved_video) / (1024 * 1024)
+                vid_cap = (
+                    f"🎬 <b>Vidéo originale décompressée</b> : <code>{title}</code>\n"
+                    f"📁 <i>Fichier : {os.path.basename(saved_video)} ({med_size_mb:.2f} Mo)</i>\n"
+                    f"✨ <i>Qualité 100% brute d'origine (sans compression)</i>"
+                )
+                msg_v = await client.send_file(
+                    channel,
+                    file=saved_video,
+                    caption=vid_cap,
+                    parse_mode='html',
+                    force_document=True,
+                    reply_to=reply_to_id
+                )
+                if auto_delete_delay:
+                    asyncio.create_task(delete_after_delay(client, channel, msg_v.id, auto_delete_delay))
+
+            if saved_zip and os.path.exists(saved_zip):
+                zip_size_mb = os.path.getsize(saved_zip) / (1024 * 1024)
+                zip_cap = (
+                    f"📦 <b>Archive .ZIP originale du leak</b>\n"
+                    f"📁 <i>Nom : {os.path.basename(saved_zip)} ({zip_size_mb:.2f} Mo)</i>"
+                )
+                if pwd:
+                    zip_cap += f"\n🔑 <i>Mot de passe de l'archive :</i> <code>{pwd}</code>"
+                msg_z = await client.send_file(
+                    channel,
+                    file=saved_zip,
+                    caption=zip_cap,
+                    parse_mode='html',
+                    force_document=True,
+                    reply_to=reply_to_id
+                )
+                if auto_delete_delay:
+                    asyncio.create_task(delete_after_delay(client, channel, msg_z.id, auto_delete_delay))
+            return
+        except Exception as e_cached:
+            print(f"[Media Leak] Erreur envoi depuis base locale : {e_cached}", flush=True)
+
+    # 2. Sinon, essayer de télécharger depuis les miroirs
     items = leak.get("items", [])
     if not items:
+        if auto_delete_delay:
+            err_msg = await client.send_message(
+                channel,
+                message="⚠️ <i>Aucun lien miroir disponible pour télécharger le fichier de ce leak.</i>",
+                parse_mode='html',
+                reply_to=reply_to_id
+            )
+            asyncio.create_task(delete_after_delay(client, channel, err_msg.id, auto_delete_delay))
         return
 
     candidate_urls = []
@@ -555,35 +695,56 @@ async def process_and_send_leak_media(client, channel, leak, reply_to_id=None):
     if not candidate_urls:
         return
 
-    tmp_dir = tempfile.mkdtemp(prefix="cyberleek_leak_dl_")
     downloaded_file = None
-    title = leak.get("title", "Leak")
-
     try:
         print(f"\n[Media Leak] Recherche & téléchargement pour : '{title}'...", flush=True)
         for u in candidate_urls:
             try:
                 parsed_path = urllib.parse.urlparse(u).path
-                base_name = os.path.basename(parsed_path) or "leak_file.bin"
+                base_name = os.path.basename(parsed_path) or f"leak_{pubkey[:8]}.bin"
                 if base_name.endswith(".html"):
                     base_name = base_name[:-5]
-                dest = os.path.join(tmp_dir, base_name)
+                dest = os.path.join(leak_dir, base_name)
 
                 print(f"[Media Leak] Essai de téléchargement depuis : {u}", flush=True)
+                
+                # Essai Bedrive si applicable
+                if "bedrive.ru" in u.lower():
+                    if download_bedrive(u, dest):
+                        downloaded_file = dest
+                        file_size_mb = os.path.getsize(dest) / (1024 * 1024)
+                        print(f"[Media Leak] Téléchargement Bedrive réussi ({file_size_mb:.2f} Mo) !", flush=True)
+                        break
+
+                # Essai téléchargement HTTP direct
                 req = urllib.request.Request(u, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
                 with urllib.request.urlopen(req, timeout=45) as resp, open(dest, 'wb') as f_out:
                     shutil.copyfileobj(resp, f_out)
 
                 if os.path.exists(dest) and os.path.getsize(dest) > 1024:
+                    with open(dest, 'rb') as f_chk:
+                        prefix = f_chk.read(512).lower()
+                        if b'<!doctype html' in prefix or b'<html' in prefix:
+                            if b'download limit' in prefix or b'forbidden' in prefix or b'not found' in prefix:
+                                os.remove(dest)
+                                continue
                     downloaded_file = dest
                     file_size_mb = os.path.getsize(dest) / (1024 * 1024)
                     print(f"[Media Leak] Téléchargement réussi ({file_size_mb:.2f} Mo) !", flush=True)
                     break
             except Exception as e_dl:
-                print(f"[Media Leak] Échec sur ce miroir : {e_dl}", flush=True)
+                print(f"[Media Leak] Échec sur ce miroir ({u}) : {e_dl}", flush=True)
 
         if not downloaded_file:
             print("[Media Leak] Aucun fichier n'a pu être téléchargé depuis les miroirs.", flush=True)
+            if auto_delete_delay:
+                err_msg = await client.send_message(
+                    channel,
+                    message="⚠️ <i>Le fichier original de ce leak n'a pas pu être téléchargé automatiquement (les liens temporaires externes ont expiré ou sont hors-ligne). Veuillez utiliser les liens directs de téléchargement ci-dessus.</i>",
+                    parse_mode='html',
+                    reply_to=reply_to_id
+                )
+                asyncio.create_task(delete_after_delay(client, channel, err_msg.id, auto_delete_delay))
             return
 
         is_zip = False
@@ -596,11 +757,8 @@ async def process_and_send_leak_media(client, channel, leak, reply_to_id=None):
             pass
 
         if is_zip or downloaded_file.lower().endswith('.zip'):
-            pwd_match = re.search(r'(?:zip\s+)?password\s*:\s*([^\s,]+)', title, re.IGNORECASE)
-            pwd = pwd_match.group(1) if pwd_match else None
             pwd_bytes = pwd.encode('utf-8') if pwd else None
-
-            extracted_dir = os.path.join(tmp_dir, "extracted")
+            extracted_dir = os.path.join(leak_dir, "extracted")
             os.makedirs(extracted_dir, exist_ok=True)
             media_extracted = None
 
@@ -626,6 +784,19 @@ async def process_and_send_leak_media(client, channel, leak, reply_to_id=None):
                 if media_extracted:
                     break
 
+            # Enregistrer dans notre base de données seen_leaks_tg.json
+            current_seen = load_seen()
+            if "saved_leaks" not in current_seen:
+                current_seen["saved_leaks"] = {}
+            current_seen["saved_leaks"][pubkey] = {
+                "title": title,
+                "video_path": media_extracted,
+                "zip_path": downloaded_file,
+                "password": pwd,
+                "timestamp": leak.get("timestamp")
+            }
+            save_seen(current_seen)
+
             if media_extracted and os.path.exists(media_extracted):
                 med_size_mb = os.path.getsize(media_extracted) / (1024 * 1024)
                 vid_cap = (
@@ -634,7 +805,7 @@ async def process_and_send_leak_media(client, channel, leak, reply_to_id=None):
                     f"✨ <i>Qualité 100% brute d'origine (sans compression)</i>"
                 )
                 print(f"[Media Leak] Envoi de la vidéo extraite sur Telegram...", flush=True)
-                await client.send_file(
+                msg_v = await client.send_file(
                     channel,
                     file=media_extracted,
                     caption=vid_cap,
@@ -642,6 +813,8 @@ async def process_and_send_leak_media(client, channel, leak, reply_to_id=None):
                     force_document=True,
                     reply_to=reply_to_id
                 )
+                if auto_delete_delay:
+                    asyncio.create_task(delete_after_delay(client, channel, msg_v.id, auto_delete_delay))
                 print("[Media Leak] Vidéo envoyée avec succès !", flush=True)
 
             zip_size_mb = os.path.getsize(downloaded_file) / (1024 * 1024)
@@ -652,7 +825,7 @@ async def process_and_send_leak_media(client, channel, leak, reply_to_id=None):
             if pwd:
                 zip_cap += f"\n🔑 <i>Mot de passe de l'archive :</i> <code>{pwd}</code>"
             print(f"[Media Leak] Envoi de l'archive .ZIP originale sur Telegram...", flush=True)
-            await client.send_file(
+            msg_z = await client.send_file(
                 channel,
                 file=downloaded_file,
                 caption=zip_cap,
@@ -660,6 +833,8 @@ async def process_and_send_leak_media(client, channel, leak, reply_to_id=None):
                 force_document=True,
                 reply_to=reply_to_id
             )
+            if auto_delete_delay:
+                asyncio.create_task(delete_after_delay(client, channel, msg_z.id, auto_delete_delay))
             print("[Media Leak] Archive .ZIP envoyée avec succès !", flush=True)
 
         else:
@@ -670,7 +845,7 @@ async def process_and_send_leak_media(client, channel, leak, reply_to_id=None):
                 f"✨ <i>Qualité 100% brute d'origine (sans compression)</i>"
             )
             print(f"[Media Leak] Envoi du fichier brut sur Telegram...", flush=True)
-            await client.send_file(
+            msg_raw = await client.send_file(
                 channel,
                 file=downloaded_file,
                 caption=file_cap,
@@ -678,13 +853,24 @@ async def process_and_send_leak_media(client, channel, leak, reply_to_id=None):
                 force_document=True,
                 reply_to=reply_to_id
             )
+            if auto_delete_delay:
+                asyncio.create_task(delete_after_delay(client, channel, msg_raw.id, auto_delete_delay))
             print("[Media Leak] Fichier original envoyé avec succès !", flush=True)
+
+            current_seen = load_seen()
+            if "saved_leaks" not in current_seen:
+                current_seen["saved_leaks"] = {}
+            current_seen["saved_leaks"][pubkey] = {
+                "title": title,
+                "video_path": downloaded_file,
+                "zip_path": None,
+                "password": pwd,
+                "timestamp": leak.get("timestamp")
+            }
+            save_seen(current_seen)
 
     except Exception as e_proc:
         print(f"[Erreur globale media leak] {e_proc}", flush=True)
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-        print("[Media Leak] Espace temporaire nettoyé.", flush=True)
 
 async def send_telegram_alert(client, channel, leak, past_leeks=None):
     seen = load_seen()
@@ -830,8 +1016,19 @@ async def monitor_loop():
             elif cmd in ['/leaks', '/lastleak', '/leak']:
                 all_l = fetch_leeks()
                 if all_l:
-                    l_text = format_leak_message(all_l[-1])
-                    await reply_and_auto_delete(l_text)
+                    all_l.sort(key=lambda x: x.get('timestamp', 0))
+                    latest_leak = all_l[-1]
+                    l_text = format_leak_message(latest_leak)
+                    rep = await reply_and_auto_delete(l_text, delay=180)
+                    asyncio.create_task(
+                        process_and_send_leak_media(
+                            client,
+                            event.chat_id,
+                            latest_leak,
+                            reply_to_id=rep.id,
+                            auto_delete_delay=180
+                        )
+                    )
                 else:
                     await reply_and_auto_delete("Aucun leak détecté pour le moment.")
 
@@ -842,6 +1039,7 @@ async def monitor_loop():
             elif cmd in ['/announcements', '/anns', '/news']:
                 anns = fetch_announcements()
                 if anns:
+                    anns.sort(key=lambda x: x.get('timestamp', 0))
                     last_a = anns[-1]
                     tz_fr = datetime.timezone(datetime.timedelta(hours=2))
                     dt_str = datetime.datetime.fromtimestamp(last_a['timestamp'], tz=tz_fr).strftime("%d/%m/%Y à %H:%M (Paris)")
