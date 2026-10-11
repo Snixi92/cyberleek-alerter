@@ -480,7 +480,7 @@ def format_crypto_message():
     fingerprint = (round(crypto['price'], 6), round(crypto['mcap'], 0), round(crypto['vol24h'], 0), round(crypto['change24h'], 2))
     return "\n".join(crypto_lines), fingerprint
 
-def make_poll_bar(pct, length=10):
+def make_poll_bar(pct, length=20):
     filled = max(0, min(length, round(pct / (100 / length))))
     empty = length - filled
     return "█" * filled + "░" * empty
@@ -514,7 +514,7 @@ def format_polls_message():
             ch_name = c.get("choice", "")
             ch_pct = c.get("pct", 0.0)
             crown = "👑 " if ch_name == leader_choice else ""
-            bar = make_poll_bar(ch_pct, length=10)
+            bar = make_poll_bar(ch_pct, length=20)
             poll_lines.append(f"{crown}<b>{ch_name}</b>")
             poll_lines.append(f"<code>{bar} {ch_pct:.1f}%</code>\n")
             fingerprint.append((ch_name, ch_pct))
@@ -1293,7 +1293,7 @@ async def monitor_loop():
                                 ch_name = c.get("choice", "")
                                 ch_pct = c.get("pct", 0.0)
                                 crown = "👑 " if ch_name == current_lead else ""
-                                bar = make_poll_bar(ch_pct, length=10)
+                                bar = make_poll_bar(ch_pct, length=20)
                                 flip_lines.append(f"{crown}<b>{ch_name}</b>")
                                 flip_lines.append(f"<code>{bar} {ch_pct:.1f}%</code>\n")
                             flip_text = "\n".join(flip_lines)
