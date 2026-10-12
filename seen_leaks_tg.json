@@ -22,18 +22,25 @@
     "FSKYZHqqzwKMYevwdZuAM4KRkcNQZqto9RLM27nKeEas",
     "3k3DqRCTKznq9bmSAa9bxBDC6poRL97johxYNNVXiZNv",
     "CXjLRA8wKBQKmhyz1MaFEsW6zgJ3F6FjDb2Y6j9YGiwp",
-    "9qjyztEygKNRf5CG6MHSTNbJqAcVjJD4n7JazrhoTuiG"
+    "9qjyztEygKNRf5CG6MHSTNbJqAcVjJD4n7JazrhoTuiG",
+    "C4AvWvLEtXvEZJTuJJXM4XyiVdtEr74A4eedk23n3GYB"
   ],
   "announcements": [
     "9QdqesNpYVMxwGqLmLMYNQRaJZeSx7ruN3bAtejQppta",
-    "C939agbM8Z859tVxQAfBjKGJArH2WHtb3SnYS3hrE5oa"
+    "C939agbM8Z859tVxQAfBjKGJArH2WHtb3SnYS3hrE5oa",
+    "EQMizwU2U5saKcVkKs4iVWgdA4eNc2wMP7jdEoaNPoBC",
+    "BsAYLi1k7EkrnuGnqSWR54yDdNTxNDU5rke8rQSWkJxt"
   ],
-  "last_poll_leader": "Thanks daddy",
+  "polls": [
+    "Es4yQSCBoJtroBAaeg9x1LzgR1BTnNQLcoLbyxjLrJEJ"
+  ],
+  "current_poll_title": "Next GTA 6 Freeroam Lucia Leek?",
+  "last_poll_leader": "Pool minigame",
   "current_mcap_level": 4000000,
   "mcap_min_threshold": 7000000,
   "mcap_muted": false,
   "pending_deletions": [],
-  "last_channel_msg_id": 954,
+  "last_channel_msg_id": 985,
   "initialized": true,
   "active_msgs": {
     "mirrors": 948,
