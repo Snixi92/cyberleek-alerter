@@ -31,8 +31,10 @@ saved_leaks/
 *.jpg
 *.jpeg
 *.png
+!mascot.png
 split_frame_*
 *.html
+!hub.html
 *.bat
 *.ico
 *.log
@@ -40,6 +42,7 @@ split_frame_*
 # Caches et configs
 *.json
 !seen_leaks_tg.json
+!leaks_database.json
 !package.json
 !package-lock.json
 config.json
