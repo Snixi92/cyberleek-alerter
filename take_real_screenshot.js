@@ -5,9 +5,9 @@ const path = require('path');
 
 const CHROME_PATH = process.env.CHROME_BIN || (process.platform === 'win32'
   ? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
-  : '/usr/bin/chromium');
+  : (fs.existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : '/usr/bin/google-chrome'));
 const PORT = 9222;
-const TARGET_URL = 'https://cyberleek.saiph.weavegate.net/';
+const TARGET_URL = process.argv[3] || process.env.CYBERLEEK_MIRROR || 'https://cyberleek.gatewaypie.com/';
 const OUT_PATH = path.join(__dirname, 'real_live_website_screenshot.png');
 
 async function main() {

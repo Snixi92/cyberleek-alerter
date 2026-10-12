@@ -391,7 +391,7 @@ def get_polls():
     return []
 
 def capture_screenshot(section="content", leak=None, past_leeks=None, ann=None):
-    """Prend une capture d'écran du site Cyberleek via Chrome CDP ou fallback Pillow haute fidélité."""
+    """Prend une capture d'écran 100% réelle et authentique du site Cyberleek via Chrome headless CDP."""
     t0 = time.time()
     try:
         real_out = os.path.join(SCRIPT_DIR, "real_live_website_screenshot.png")
@@ -402,30 +402,21 @@ def capture_screenshot(section="content", leak=None, past_leeks=None, ann=None):
                 pass
         js_script = os.path.join(SCRIPT_DIR, "take_real_screenshot.js")
         if os.path.exists(js_script):
-            subprocess.run(["node", js_script, section], capture_output=True, timeout=30)
+            active_url = "https://cyberleek.gatewaypie.com/"
+            try:
+                for status, u in check_mirrors():
+                    if status == "🟢":
+                        active_url = u
+                        break
+            except Exception:
+                pass
+
+            subprocess.run(["node", js_script, section, active_url], capture_output=True, timeout=35)
             if os.path.exists(real_out) and os.path.getsize(real_out) > 1000:
                 print(f"[Vraie Capture Réelle] Screenshot ({section}) capturé en {time.time()-t0:.2f}s ({os.path.getsize(real_out)/1024:.1f} KB)", flush=True)
                 return real_out
     except Exception as e:
         print(f"[Screenshot Error] {e}", flush=True)
-
-    # Fallback résilient pour les annonces (notamment sur Render où Chrome n'est pas installé)
-    if section == "anns" or ann is not None:
-        try:
-            from render_announcement_card import render_announcement_card
-            ann_target = ann
-            if not ann_target:
-                anns = get_announcements_from_chain()
-                if anns:
-                    ann_target = anns[0]
-            if ann_target:
-                card_out = os.path.join(SCRIPT_DIR, "announcement_card.png")
-                res_path = render_announcement_card(ann_target, card_out)
-                if res_path and os.path.exists(res_path) and os.path.getsize(res_path) > 1000:
-                    print(f"[Annonce Card Fallback] Image d'annonce cyberpunk générée en {time.time()-t0:.2f}s ({os.path.getsize(res_path)/1024:.1f} KB)", flush=True)
-                    return res_path
-        except Exception as e_card:
-            print(f"[Annonce Card Fallback Error] {e_card}", flush=True)
 
     return None
 
@@ -591,29 +582,65 @@ async def send_announcement_alert(client, channel, ann):
         await client.send_message(channel, message=ann_text, parse_mode='html')
     print("  -> Annonce envoyée avec succès sur Telegram !", flush=True)
 
+def get_paris_now():
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.datetime.now(ZoneInfo("Europe/Paris"))
+    except Exception:
+        return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=2)))
+
+def make_poll_bar(pct, length=20):
+    filled = max(0, min(length, round(pct / (100 / length))))
+    empty = length - filled
+    return "█" * filled + "━" * empty
+
 async def send_poll_alert(client, channel, poll):
     """Envoie une alerte officielle Telegram lorsqu'un nouveau vote communautaire est lancé sur Solana."""
-    tz_fr = datetime.timezone(datetime.timedelta(hours=2))
-    ends_at = poll.get('ends_at', 0)
-    end_str = datetime.datetime.fromtimestamp(ends_at, tz=tz_fr).strftime("%d/%m/%Y à %H:%M (Paris)") if ends_at else "Inconnue"
-    title_esc = html.escape(poll.get('title', 'Nouveau vote'))
+    # Tenter d'enrichir avec get_poll_data.js pour avoir les pourcentages exacts
+    if not any(c.get("pct", 0) > 0 for c in poll.get("choices", [])):
+        try:
+            js_p = os.path.join(SCRIPT_DIR, "get_poll_data.js")
+            if os.path.exists(js_p):
+                proc = subprocess.run(["node", js_p], capture_output=True, text=True, timeout=6)
+                if proc.returncode == 0 and proc.stdout.strip():
+                    p_js = json.loads(proc.stdout.strip())
+                    if p_js.get("title") == poll.get("title") and p_js.get("choices"):
+                        poll = p_js
+        except Exception:
+            pass
+
+    now_str = get_paris_now().strftime("%H:%M:%S (Paris)")
+    ends_at = poll.get('ends_at')
+    if ends_at:
+        tz_fr = datetime.timezone(datetime.timedelta(hours=2))
+        end_dt = datetime.datetime.fromtimestamp(ends_at, tz=tz_fr)
+        end_str = end_dt.strftime("%d/%m/%Y à %H:%M")
+    else:
+        end_str = "Inconnue"
+
+    title_esc = html.escape(poll.get('title', 'Sujet inconnu'))
     countdown = poll.get('countdown', '')
 
-    choices_text = []
-    for i, c in enumerate(poll.get('choices', []), 1):
-        ch_name = html.escape(c.get('choice', ''))
-        choices_text.append(f"  {i}. <b>{ch_name}</b>")
-    choices_str = "\n".join(choices_text)
+    choices = poll.get("choices", [])
+    leader_choice = max(choices, key=lambda c: (c.get("pct") or 0)).get("choice") if choices else None
 
     poll_lines = [
         "🗳️ <b>NOUVEAU VOTE OFFICIEL CYBERLEEK DÉTECTÉ</b> 🗳️\n",
-        f"🎯 <b>Sujet :</b> <code>{title_esc}</code>",
+        f"🗳️ <b>Sujet :</b> {title_esc}",
         f"⏳ <b>Statut :</b> En cours",
-        f"📅 <b>Fin du vote :</b> {end_str} (dans {countdown})\n",
-        "📋 <b>Choix disponibles :</b>",
-        choices_str,
-        "\n💡 <i>Participez dès maintenant sur les miroirs officiels Cyberleek !</i>"
+        f"📅 <b>Fin du vote :</b> {end_str} (dans {countdown})\n"
     ]
+
+    for c in choices:
+        ch_name = c.get("choice", "")
+        ch_pct = float(c.get("pct") or 0.0)
+        ch_name_esc = html.escape(ch_name)
+        crown = "👑 " if ch_name == leader_choice and ch_pct > 0 else ""
+        bar = make_poll_bar(ch_pct, length=20)
+        poll_lines.append(f"{crown}<b>{ch_name_esc}</b>")
+        poll_lines.append(f"{bar} {ch_pct:.1f}%\n")
+
+    poll_lines.append(f"<i>🔄 Mis à jour en direct : {now_str}</i>")
     poll_text = "\n".join(poll_lines)
     print(f"\n[NOUVEAU VOTE DÉTECTÉ] Publication du vote '{title_esc}' sur Telegram...", flush=True)
     msg = await client.send_message(channel, message=poll_text, parse_mode='html')
@@ -631,13 +658,6 @@ def format_mirrors_message():
     fingerprint = tuple((s, u) for s, u in mirrors)
     return "\n".join(mirror_lines), fingerprint
 
-def get_paris_now():
-    try:
-        from zoneinfo import ZoneInfo
-        return datetime.datetime.now(ZoneInfo("Europe/Paris"))
-    except Exception:
-        return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=2)))
-
 def format_crypto_message():
     crypto = get_crypto_stats()
     ch_sign = "+" if crypto["change24h"] >= 0 else ""
@@ -651,11 +671,6 @@ def format_crypto_message():
     ]
     fingerprint = (round(crypto['price'], 6), round(crypto['mcap'], 0), round(crypto['vol24h'], 0), round(crypto['change24h'], 2))
     return "\n".join(crypto_lines), fingerprint
-
-def make_poll_bar(pct, length=20):
-    filled = max(0, min(length, round(pct / (100 / length))))
-    empty = length - filled
-    return "█" * filled + "━" * empty
 
 def format_polls_message():
     p = None

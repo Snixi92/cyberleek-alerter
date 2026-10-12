@@ -10,7 +10,6 @@ venv/
 env/
 *.py
 !cyberleek_telegram_monitor.py
-!render_announcement_card.py
 
 # Node
 node_modules/
