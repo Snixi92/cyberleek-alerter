@@ -24,7 +24,7 @@ import zipfile
 import re
 import http.cookiejar
 import zlib
-from telethon import TelegramClient, types, errors, events
+from telethon import TelegramClient, types, errors, events, Button
 from telethon.sessions import StringSession
 from telethon.errors import MessageNotModifiedError
 from telethon.tl.functions.bots import SetBotCommandsRequest
@@ -643,7 +643,30 @@ def format_polls_message():
         print(f"[Erreur format_polls_message] {e}", flush=True)
         return "", None
 
-def format_leak_message(leak):
+def format_leak_btn_label(lbl, url):
+    lbl_lower = lbl.lower()
+    if "arweave" in lbl_lower or "ar.io" in url or "arweave.net" in url:
+        num = "".join(c for c in lbl_lower if c.isdigit())
+        name = f"Arweave #{num}" if num else "Arweave"
+    elif "bedrive" in lbl_lower or "bedrive.ru" in url:
+        name = "Bedrive"
+    elif "temp.sh" in lbl_lower or "temp.sh" in url:
+        name = "Temp.sh"
+    elif "upload.ee" in lbl_lower or "upload.ee" in url:
+        name = "Upload.ee"
+    elif "transfiles" in lbl_lower or "transfiles.ru" in url:
+        name = "Transfiles"
+    elif "gofile" in lbl_lower or "gofile.io" in url:
+        name = "Gofile"
+    elif "disroot" in lbl_lower or "disroot.org" in url:
+        name = "Disroot"
+    elif "lufi" in lbl_lower or "lufi.ethibox.fr" in url:
+        name = "Lufi"
+    else:
+        name = lbl.split()[0]
+    return f"📥 Télécharger ({name}) 📥"
+
+def format_leak_message_and_buttons(leak):
     tz_fr = datetime.timezone(datetime.timedelta(hours=2))
     dt_str = datetime.datetime.fromtimestamp(leak['timestamp'], tz=tz_fr).strftime("%d/%m/%Y à %H:%M")
 
@@ -651,17 +674,26 @@ def format_leak_message(leak):
         "🚨 <b>NOUVEAU LEEK DÉTECTÉ</b> 🚨\n",
         f"🎯 <b>Nom du leak :</b> <code>{leak.get('title', 'Sans Titre')}</code>",
         f"📅 <b>Date :</b> {dt_str}\n",
-        "📥 <b>Liens directs de téléchargement :</b>"
+        " ----------👇 ---------- <b>TÉLÉCHARGEMENT DIRECT</b> ----------👇 ----------- "
     ]
+
+    buttons = []
     items = leak.get("items", [])
-    if items:
-        for it in items:
-            lbl = it.get("label", "Lien").strip()
-            url = it.get("url", "").strip()
-            leak_lines.append(f"  • <a href='{url}'>{lbl}</a>")
-    else:
-        leak_lines.append("  • <i>Aucun lien direct</i>")
-    return "\n".join(leak_lines)
+    for it in items:
+        lbl = it.get("label", "Télécharger").strip()
+        url = it.get("url", "").strip()
+        btn_txt = format_leak_btn_label(lbl, url)
+        buttons.append(Button.url(btn_txt, url))
+
+    keyboard_rows = []
+    for i in range(0, len(buttons), 2):
+        keyboard_rows.append(buttons[i:i+2])
+
+    return "\n".join(leak_lines), (keyboard_rows if keyboard_rows else None)
+
+def format_leak_message(leak):
+    text, _ = format_leak_message_and_buttons(leak)
+    return text
 
 def download_bedrive(url, dest):
     """
@@ -1040,11 +1072,11 @@ async def send_telegram_alert(client, channel, leak, past_leeks=None):
         except Exception:
             pass
 
-    # 2. ALERTE DU NOUVEAU LEEK (Nom exact + liens directs)
+    # 2. ALERTE DU NOUVEAU LEEK (Nom exact + boutons directs)
     msg_leak = None
     try:
-        leak_text = format_leak_message(leak)
-        msg_leak = await client.send_message(channel, message=leak_text, parse_mode='html')
+        leak_text, leak_buttons = format_leak_message_and_buttons(leak)
+        msg_leak = await client.send_message(channel, message=leak_text, buttons=leak_buttons, parse_mode='html')
         print(f"[Alerte leak envoyée avec succès] ID: {msg_leak.id}", flush=True)
     except Exception as e:
         print(f"[Erreur envoi leak] {e}", flush=True)
@@ -1114,9 +1146,9 @@ async def monitor_loop():
         if '@' in cmd:
             cmd = cmd.split('@')[0]
 
-        async def reply_and_auto_delete(msg_text, delay=60):
+        async def reply_and_auto_delete(msg_text, buttons=None, delay=60):
             try:
-                rep = await event.reply(msg_text, parse_mode='html')
+                rep = await event.reply(msg_text, buttons=buttons, parse_mode='html')
                 target = channel if event.chat_id == CHANNEL_ID else event.chat_id
                 asyncio.create_task(delete_after_delay(client, target, rep.id, delay))
                 asyncio.create_task(delete_after_delay(client, target, event.id, delay))
@@ -1154,8 +1186,8 @@ async def monitor_loop():
                 if all_l:
                     all_l.sort(key=lambda x: x.get('timestamp', 0))
                     latest_leak = all_l[-1]
-                    l_text = format_leak_message(latest_leak)
-                    rep = await reply_and_auto_delete(l_text, delay=60)
+                    l_text, l_buttons = format_leak_message_and_buttons(latest_leak)
+                    rep = await reply_and_auto_delete(l_text, buttons=l_buttons, delay=60)
                     asyncio.create_task(
                         process_and_send_leak_media(
                             client,
