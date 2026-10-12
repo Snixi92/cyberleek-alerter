@@ -117,6 +117,11 @@ async function main() {
         const card = document.getElementById('card-anns');
         if (card) {
           card.classList.remove('collapsed', 'hidden');
+          const body = document.getElementById('anns');
+          if (body) {
+            body.style.display = 'block';
+            body.classList.remove('hidden');
+          }
           card.scrollIntoView({ behavior: 'instant', block: 'start' });
         }
       } else if (sec === 'poll') {

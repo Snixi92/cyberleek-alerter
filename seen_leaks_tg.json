@@ -40,7 +40,7 @@
   "mcap_min_threshold": 7000000,
   "mcap_muted": false,
   "pending_deletions": [],
-  "last_channel_msg_id": 985,
+  "last_channel_msg_id": 991,
   "initialized": true,
   "active_msgs": {
     "mirrors": 948,
