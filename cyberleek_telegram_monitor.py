@@ -664,7 +664,7 @@ def format_leak_btn_label(lbl, url):
         name = "Lufi"
     else:
         name = lbl.split()[0]
-    return f"📥 Télécharger ({name}) 📥"
+    return f"📥 {name} 📥"
 
 def format_leak_message_and_buttons(leak):
     tz_fr = datetime.timezone(datetime.timedelta(hours=2))
@@ -674,7 +674,7 @@ def format_leak_message_and_buttons(leak):
         "🚨 <b>NOUVEAU LEEK DÉTECTÉ</b> 🚨\n",
         f"🎯 <b>Nom du leak :</b> <code>{leak.get('title', 'Sans Titre')}</code>",
         f"📅 <b>Date :</b> {dt_str}\n",
-        " ----------👇 ---------- <b>TÉLÉCHARGEMENT DIRECT</b> ----------👇 ----------- "
+        "👇 -------<b>TÉLÉCHARGEMENT DIRECT</b>-------👇"
     ]
 
     buttons = []
