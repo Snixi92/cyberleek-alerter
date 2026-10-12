@@ -22,6 +22,7 @@ import tempfile
 import shutil
 import zipfile
 import re
+import html
 import http.cookiejar
 import zlib
 from telethon import TelegramClient, types, errors, events, Button
@@ -130,8 +131,10 @@ def load_seen():
         return {"leeks": [], "initialized": False}
 
 def save_seen(data):
-    with open(SEEN_FILE, "w", encoding="utf-8") as f:
+    tmp_file = f"{SEEN_FILE}.tmp"
+    with open(tmp_file, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
+    os.replace(tmp_file, SEEN_FILE)
 
 class BinaryReader:
     def __init__(self, data):
@@ -271,31 +274,7 @@ last_known_crypto = {"price": 0.0027, "mcap": 1950000.0, "vol24h": 370000.0, "ch
 
 def get_crypto_stats():
     global last_known_crypto
-    # 1. GeckoTerminal (API Solana directe, pas de blocage)
-    try:
-        url = f"https://api.geckoterminal.com/api/v2/networks/solana/tokens/{TOKEN_ADDRESS}"
-        req = urllib.request.Request(url, headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'application/json'
-        })
-        with urllib.request.urlopen(req, timeout=6) as resp:
-            data = json.loads(resp.read().decode())
-        attr = data.get("data", {}).get("attributes", {})
-        price = float(attr.get("price_usd") or 0)
-        mcap = float(attr.get("fdv_usd") or attr.get("market_cap_usd") or 0)
-        vol24h = float(attr.get("volume_usd", {}).get("h24") or 0)
-        if price > 0:
-            last_known_crypto = {
-                "price": price,
-                "mcap": mcap,
-                "vol24h": vol24h,
-                "change24h": last_known_crypto.get("change24h", 0.0)
-            }
-            return last_known_crypto
-    except Exception as e:
-        pass
-
-    # 2. DexScreener fallback
+    # 1. DexScreener (avec prix en direct et vrai priceChange 24h)
     try:
         url = f"https://api.dexscreener.com/latest/dex/tokens/{TOKEN_ADDRESS}"
         req = urllib.request.Request(url, headers={
@@ -319,7 +298,31 @@ def get_crypto_stats():
                     "change24h": change24h
                 }
                 return last_known_crypto
-    except Exception as e:
+    except Exception:
+        pass
+
+    # 2. GeckoTerminal fallback (si DexScreener est indisponible ou rate-limité)
+    try:
+        url = f"https://api.geckoterminal.com/api/v2/networks/solana/tokens/{TOKEN_ADDRESS}"
+        req = urllib.request.Request(url, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/json'
+        })
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = json.loads(resp.read().decode())
+        attr = data.get("data", {}).get("attributes", {})
+        price = float(attr.get("price_usd") or 0)
+        mcap = float(attr.get("fdv_usd") or attr.get("market_cap_usd") or 0)
+        vol24h = float(attr.get("volume_usd", {}).get("h24") or 0)
+        if price > 0:
+            last_known_crypto = {
+                "price": price,
+                "mcap": mcap,
+                "vol24h": vol24h,
+                "change24h": last_known_crypto.get("change24h", 0.0)
+            }
+            return last_known_crypto
+    except Exception:
         pass
 
     return last_known_crypto
@@ -540,8 +543,8 @@ async def send_announcement_alert(client, channel, ann):
     tz_fr = datetime.timezone(datetime.timedelta(hours=2))
     dt_str = datetime.datetime.fromtimestamp(ann['timestamp'], tz=tz_fr).strftime("%d/%m/%Y à %H:%M (Paris)")
     
-    title_en = ann.get('title', 'Sans Titre')
-    body_en = ann.get('body', '')
+    title_en = html.escape(ann.get('title', 'Sans Titre'))
+    body_en = html.escape(ann.get('body', ''))
     
     ann_lines = [
         "📢 <b>NOUVELLE ANNONCE OFFICIELLE CYBERLEEK</b>\n",
@@ -617,63 +620,77 @@ def format_polls_message():
         else:
             end_str = "Inconnue"
 
+        p_title = html.escape(p.get('title', 'Sujet inconnu'))
+        p_status = html.escape(p.get('status', 'Inconnu'))
+        p_countdown = p.get('countdown', '')
+
         poll_lines = [
             "📊 <b>TABLEAU DE BORD DES VOTES (MODE SILENCIEUX)</b>\n",
-            f"🗳️ <b>Sujet :</b> {p['title']}",
-            f"⏳ <b>Statut :</b> {p['status']}",
-            f"📅 <b>Fin du vote :</b> {end_str} (dans {p['countdown']})\n"
+            f"🗳️ <b>Sujet :</b> {p_title}",
+            f"⏳ <b>Statut :</b> {p_status}",
+            f"📅 <b>Fin du vote :</b> {end_str} (dans {p_countdown})\n"
         ]
 
         choices = p.get("choices", [])
-        leader_choice = max(choices, key=lambda c: c.get("pct", 0)).get("choice") if choices else None
+        leader_choice = max(choices, key=lambda c: (c.get("pct") or 0)).get("choice") if choices else None
 
         fingerprint = []
         for c in choices:
             ch_name = c.get("choice", "")
-            ch_pct = c.get("pct", 0.0)
+            ch_pct = float(c.get("pct") or 0.0)
+            ch_name_esc = html.escape(ch_name)
             crown = "👑 " if ch_name == leader_choice else ""
             bar = make_poll_bar(ch_pct, length=20)
-            poll_lines.append(f"{crown}<b>{ch_name}</b>")
+            poll_lines.append(f"{crown}<b>{ch_name_esc}</b>")
             poll_lines.append(f"{bar} {ch_pct:.1f}%\n")
             fingerprint.append((ch_name, ch_pct))
 
         poll_lines.append(f"<i>🔄 Mis à jour en direct : {now_str}</i>")
-        return "\n".join(poll_lines), (p['title'], p['status'], end_str, p['countdown'], tuple(fingerprint))
+        return "\n".join(poll_lines), (p.get('title', ''), p.get('status', ''), end_str, p_countdown, tuple(fingerprint), leader_choice, choices)
 
     except Exception as e:
         print(f"[Erreur format_polls_message] {e}", flush=True)
         return "", None
 
 def format_leak_btn_label(lbl, url):
-    lbl_lower = lbl.lower()
-    if "arweave" in lbl_lower or "ar.io" in url or "arweave.net" in url:
+    lbl_lower = (lbl or "").lower()
+    url_lower = (url or "").lower()
+    if "arweave" in lbl_lower or "ar.io" in url_lower or "arweave.net" in url_lower:
         num = "".join(c for c in lbl_lower if c.isdigit())
         name = f"Arweave #{num}" if num else "Arweave"
-    elif "bedrive" in lbl_lower or "bedrive.ru" in url:
+    elif "bedrive" in lbl_lower or "bedrive.ru" in url_lower:
         name = "Bedrive"
-    elif "temp.sh" in lbl_lower or "temp.sh" in url:
+    elif "temp.sh" in lbl_lower or "temp.sh" in url_lower:
         name = "Temp.sh"
-    elif "upload.ee" in lbl_lower or "upload.ee" in url:
+    elif "upload.ee" in lbl_lower or "upload.ee" in url_lower:
         name = "Upload.ee"
-    elif "transfiles" in lbl_lower or "transfiles.ru" in url:
+    elif "transfiles" in lbl_lower or "transfiles.ru" in url_lower:
         name = "Transfiles"
-    elif "gofile" in lbl_lower or "gofile.io" in url:
+    elif "gofile" in lbl_lower or "gofile.io" in url_lower:
         name = "Gofile"
-    elif "disroot" in lbl_lower or "disroot.org" in url:
+    elif "disroot" in lbl_lower or "disroot.org" in url_lower:
         name = "Disroot"
-    elif "lufi" in lbl_lower or "lufi.ethibox.fr" in url:
+    elif "lufi" in lbl_lower or "lufi.ethibox.fr" in url_lower:
         name = "Lufi"
+    elif "krakenfiles" in lbl_lower or "krakenfiles.com" in url_lower:
+        name = "Krakenfiles"
+    elif "cyberleek" in lbl_lower or "cyberleek" in url_lower:
+        name = "Cyberleek Mirror"
     else:
-        name = lbl.split()[0]
+        parts = (lbl or "").strip().split()
+        name = parts[0] if parts else "Miroir"
     return f"📥 {name} 📥"
 
 def format_leak_message_and_buttons(leak):
     tz_fr = datetime.timezone(datetime.timedelta(hours=2))
     dt_str = datetime.datetime.fromtimestamp(leak['timestamp'], tz=tz_fr).strftime("%d/%m/%Y à %H:%M")
 
+    raw_title = leak.get('title', 'Sans Titre')
+    escaped_title = html.escape(raw_title)
+
     leak_lines = [
         "🚨 <b>NOUVEAU LEEK DÉTECTÉ</b> 🚨\n",
-        f"🎯 <b>Nom du leak :</b> <code>{leak.get('title', 'Sans Titre')}</code>",
+        f"🎯 <b>Nom du leak :</b> <code>{escaped_title}</code>",
         f"📅 <b>Date :</b> {dt_str}\n",
         "👇 -------<b>TÉLÉCHARGEMENT DIRECT</b>-------👇"
     ]
@@ -683,6 +700,8 @@ def format_leak_message_and_buttons(leak):
     for it in items:
         lbl = it.get("label", "Télécharger").strip()
         url = it.get("url", "").strip()
+        if not url or not (url.startswith("http://") or url.startswith("https://")):
+            continue
         btn_txt = format_leak_btn_label(lbl, url)
         buttons.append(Button.url(btn_txt, url))
 
@@ -711,10 +730,11 @@ def download_bedrive(url, dest):
         }
         req = urllib.request.Request(url, headers=headers)
         resp = opener.open(req, timeout=20)
-        html = resp.read().decode('utf-8', errors='replace')
-        if "antibot" in html or "Button()" in html:
-            inputs = dict(re.findall(r'name=\\?"([^\\"]+)\\?" type=\\?"hidden\\?" value=\\?"([^\\"]*)\\?"', html))
-            img_match = re.search(r'data:image/png;base64,([A-Za-z0-9+/=]+)', html)
+        raw_content = resp.read()
+        html_preview = raw_content[:4096].decode('utf-8', errors='replace')
+        if "antibot" in html_preview or "Button()" in html_preview:
+            inputs = dict(re.findall(r'name=\\?"([^\\"]+)\\?" type=\\?"hidden\\?" value=\\?"([^\\"]*)\\?"', html_preview))
+            img_match = re.search(r'data:image/png;base64,([A-Za-z0-9+/=]+)', html_preview)
             if img_match and inputs:
                 raw_png = base64.b64decode(img_match.group(1))
                 idat_idx = raw_png.find(b'IDAT')
@@ -748,7 +768,7 @@ def download_bedrive(url, dest):
                     return True
         else:
             with open(dest, 'wb') as f_out:
-                f_out.write(html.encode('utf-8'))
+                f_out.write(raw_content)
             if os.path.exists(dest) and os.path.getsize(dest) > 1024:
                 return True
     except Exception as e:
@@ -1212,8 +1232,8 @@ async def monitor_loop():
                     last_a = anns[-1]
                     tz_fr = datetime.timezone(datetime.timedelta(hours=2))
                     dt_str = datetime.datetime.fromtimestamp(last_a['timestamp'], tz=tz_fr).strftime("%d/%m/%Y à %H:%M (Paris)")
-                    t_en = last_a.get('title', 'Sans Titre')
-                    b_en = last_a.get('body', '')
+                    t_en = html.escape(last_a.get('title', 'Sans Titre'))
+                    b_en = html.escape(last_a.get('body', ''))
                     a_lines = [
                         "📢 <b>DERNIÈRE ANNONCE OFFICIELLE CYBERLEEK</b>\n",
                         f"🎯 <b>Titre :</b> <code>{t_en}</code>",
@@ -1378,7 +1398,7 @@ async def monitor_loop():
                 crypto_id = active_msgs.get("crypto")
                 if crypto_id:
                     crypto_text, crypto_fp = format_crypto_message()
-                    if crypto_fp != last_crypto_fp:
+                    if crypto_text and crypto_fp and crypto_fp != last_crypto_fp:
                         try:
                             await client.edit_message(channel, message=crypto_id, text=crypto_text, parse_mode='html')
                             last_crypto_fp = crypto_fp
@@ -1448,8 +1468,9 @@ async def monitor_loop():
             if now - last_polls_check >= 30:
                 last_polls_check = now
                 polls_id = active_msgs.get("polls")
-                if polls_id:
-                    polls_text, polls_fp = format_polls_message()
+                polls_text, poll_data = format_polls_message()
+                if polls_id and polls_text and poll_data:
+                    polls_fp = poll_data[:5]
                     if polls_fp != last_polls_fp:
                         try:
                             await client.edit_message(channel, message=polls_id, text=polls_text, parse_mode='html')
@@ -1460,38 +1481,34 @@ async def monitor_loop():
                         except Exception as e:
                             print(f"[Erreur edit votes] {e}", flush=True)
 
-                # Vérification de renversement de leader dans le vote
-                try:
-                    proc_poll = subprocess.run(["node", os.path.join(SCRIPT_DIR, "get_poll_data.js")], capture_output=True, text=True, timeout=10)
-                    poll_res = json.loads(proc_poll.stdout.strip())
-                    p_choices = poll_res.get("choices", [])
-                    if p_choices:
-                        leader_obj = max(p_choices, key=lambda c: c.get("pct", 0))
-                        current_lead = leader_obj.get("choice")
+                    # Vérification de renversement de leader dans le vote sans relancer de subprocess
+                    try:
+                        current_lead = poll_data[5] if len(poll_data) > 5 else None
+                        p_choices = poll_data[6] if len(poll_data) > 6 else []
                         last_lead = seen.get("last_poll_leader")
-                        if last_lead and current_lead != last_lead:
+                        if last_lead and current_lead and current_lead != last_lead:
                             flip_lines = [
                                 "🗳️ <b>CHANGEMENT DE LEADER DANS LE VOTE GTA 6 !</b> 🗳️\n",
-                                f"🔥 <b>{current_lead}</b> vient de devancer <b>{last_lead}</b> !\n",
+                                f"🔥 <b>{html.escape(current_lead)}</b> vient de devancer <b>{html.escape(last_lead)}</b> !\n",
                                 "📊 <b>Nouveaux résultats :</b>\n"
                             ]
                             for c in p_choices:
                                 ch_name = c.get("choice", "")
-                                ch_pct = c.get("pct", 0.0)
+                                ch_pct = float(c.get("pct") or 0.0)
                                 crown = "👑 " if ch_name == current_lead else ""
                                 bar = make_poll_bar(ch_pct, length=20)
-                                flip_lines.append(f"{crown}<b>{ch_name}</b>")
+                                flip_lines.append(f"{crown}<b>{html.escape(ch_name)}</b>")
                                 flip_lines.append(f"{bar} {ch_pct:.1f}%\n")
                             flip_text = "\n".join(flip_lines)
                             sent_flip = await client.send_message(channel, message=flip_text, parse_mode='html')
                             asyncio.create_task(delete_after_delay(client, channel, sent_flip.id, 180))
                             seen["last_poll_leader"] = current_lead
                             save_seen(seen)
-                        elif not last_lead:
+                        elif not last_lead and current_lead:
                             seen["last_poll_leader"] = current_lead
                             save_seen(seen)
-                except Exception as e:
-                    pass
+                    except Exception as e:
+                        pass
 
             # 5. MODIFICATION DYNAMIQUE DES MIROIRS (toutes les 60s)
             if now - last_mirrors_check >= 60:
@@ -1499,7 +1516,7 @@ async def monitor_loop():
                 mirrors_id = active_msgs.get("mirrors")
                 if mirrors_id:
                     mirrors_text, mirrors_fp = format_mirrors_message()
-                    if mirrors_fp != last_mirrors_fp:
+                    if mirrors_text and mirrors_fp and mirrors_fp != last_mirrors_fp:
                         try:
                             await client.edit_message(channel, message=mirrors_id, text=mirrors_text, parse_mode='html')
                             last_mirrors_fp = mirrors_fp
