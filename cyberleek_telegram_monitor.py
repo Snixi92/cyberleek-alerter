@@ -345,7 +345,9 @@ def get_polls():
             now = datetime.datetime.now(datetime.timezone.utc).timestamp()
             polls = []
             for item in res.get('result', []):
+                pk = item.get('pubkey')
                 raw = base64.b64decode(item['account']['data'][0])
+                ts = struct.unpack_from('<q', raw, 8 + 32)[0]
                 offset = 8 + 32 + 8 + 32
                 l_title = struct.unpack_from('<I', raw, offset)[0]; offset += 4
                 title = raw[offset:offset+l_title].decode('utf-8', errors='replace'); offset += l_title
@@ -374,13 +376,15 @@ def get_polls():
                     choice_data.append({"choice": c, "pct": pct, "votes": v})
 
                 polls.append({
+                    "pubkey": pk,
+                    "timestamp": ts,
                     "title": title,
                     "status": status,
                     "countdown": countdown,
                     "ends_at": ends_at,
                     "choices": choice_data
                 })
-            polls.sort(key=lambda x: (0 if x["status"] == "En cours" else 1, -x["ends_at"]))
+            polls.sort(key=lambda x: (0 if x["status"] == "En cours" else 1, -x["timestamp"]))
             return polls
         except Exception:
             switch_rpc()
@@ -587,7 +591,34 @@ async def send_announcement_alert(client, channel, ann):
         await client.send_message(channel, message=ann_text, parse_mode='html')
     print("  -> Annonce envoyée avec succès sur Telegram !", flush=True)
 
+async def send_poll_alert(client, channel, poll):
+    """Envoie une alerte officielle Telegram lorsqu'un nouveau vote communautaire est lancé sur Solana."""
+    tz_fr = datetime.timezone(datetime.timedelta(hours=2))
+    ends_at = poll.get('ends_at', 0)
+    end_str = datetime.datetime.fromtimestamp(ends_at, tz=tz_fr).strftime("%d/%m/%Y à %H:%M (Paris)") if ends_at else "Inconnue"
+    title_esc = html.escape(poll.get('title', 'Nouveau vote'))
+    countdown = poll.get('countdown', '')
 
+    choices_text = []
+    for i, c in enumerate(poll.get('choices', []), 1):
+        ch_name = html.escape(c.get('choice', ''))
+        choices_text.append(f"  {i}. <b>{ch_name}</b>")
+    choices_str = "\n".join(choices_text)
+
+    poll_lines = [
+        "🗳️ <b>NOUVEAU VOTE OFFICIEL CYBERLEEK DÉTECTÉ</b> 🗳️\n",
+        f"🎯 <b>Sujet :</b> <code>{title_esc}</code>",
+        f"⏳ <b>Statut :</b> En cours",
+        f"📅 <b>Fin du vote :</b> {end_str} (dans {countdown})\n",
+        "📋 <b>Choix disponibles :</b>",
+        choices_str,
+        "\n💡 <i>Participez dès maintenant sur les miroirs officiels Cyberleek !</i>"
+    ]
+    poll_text = "\n".join(poll_lines)
+    print(f"\n[NOUVEAU VOTE DÉTECTÉ] Publication du vote '{title_esc}' sur Telegram...", flush=True)
+    msg = await client.send_message(channel, message=poll_text, parse_mode='html')
+    print(f"  -> Alerte nouveau vote envoyée avec succès (#{msg.id}) !", flush=True)
+    return msg
 
 def format_mirrors_message():
     mirror_lines = [
@@ -627,9 +658,29 @@ def make_poll_bar(pct, length=20):
     return "█" * filled + "━" * empty
 
 def format_polls_message():
+    p = None
     try:
-        proc = subprocess.run(["node", os.path.join(SCRIPT_DIR, "get_poll_data.js")], capture_output=True, text=True, timeout=10)
-        p = json.loads(proc.stdout.strip())
+        js_p = os.path.join(SCRIPT_DIR, "get_poll_data.js")
+        if os.path.exists(js_p):
+            proc = subprocess.run(["node", js_p], capture_output=True, text=True, timeout=10)
+            if proc.returncode == 0 and proc.stdout.strip():
+                p = json.loads(proc.stdout.strip())
+    except Exception:
+        p = None
+
+    # Fallback natif Python 100% autonome (utilise get_polls direct sur RPC Solana)
+    if not p:
+        try:
+            polls = get_polls()
+            if polls:
+                p = polls[0]
+        except Exception as e_gp:
+            print(f"[Fallback get_polls] {e_gp}", flush=True)
+
+    if not p:
+        return "", None
+
+    try:
         now_str = get_paris_now().strftime("%H:%M:%S (Paris)")
 
         ends_at = p.get('ends_at')
@@ -659,7 +710,7 @@ def format_polls_message():
             ch_name = c.get("choice", "")
             ch_pct = float(c.get("pct") or 0.0)
             ch_name_esc = html.escape(ch_name)
-            crown = "👑 " if ch_name == leader_choice else ""
+            crown = "👑 " if ch_name == leader_choice and ch_pct > 0 else ""
             bar = make_poll_bar(ch_pct, length=20)
             poll_lines.append(f"{crown}<b>{ch_name_esc}</b>")
             poll_lines.append(f"{bar} {ch_pct:.1f}%\n")
@@ -1520,6 +1571,21 @@ async def monitor_loop():
                     save_seen(seen)
                     seen_anns.add(ann["pubkey"])
 
+            # 2.5 DÉTECTION ON-CHAIN DES NOUVEAUX VOTES DU SITE (toutes les 1.5s)
+            fresh_polls = get_polls()
+            seen_polls = set(seen.get("polls", []))
+            for pl in fresh_polls:
+                pk = pl.get("pubkey") or pl.get("title")
+                if pl.get("status") == "En cours" and pk not in seen_polls:
+                    print(f"\n🗳️ [NOUVEAU VOTE EN DIRECT DÉTECTÉ] : {pl.get('title')}", flush=True)
+                    await send_poll_alert(client, channel, pl)
+                    seen = load_seen()
+                    if "polls" not in seen:
+                        seen["polls"] = []
+                    seen["polls"].append(pk)
+                    save_seen(seen)
+                    seen_polls.add(pk)
+
             # 3. MODIFICATION DYNAMIQUE DE LA CRYPTO ET PALIERS MCAP (toutes les 20s)
             if now - last_crypto_check >= 20:
                 last_crypto_check = now
@@ -1611,10 +1677,19 @@ async def monitor_loop():
 
                     # Vérification de renversement de leader dans le vote sans relancer de subprocess
                     try:
+                        p_title = poll_data[0] if len(poll_data) > 0 else ""
                         current_lead = poll_data[5] if len(poll_data) > 5 else None
                         p_choices = poll_data[6] if len(poll_data) > 6 else []
                         last_lead = seen.get("last_poll_leader")
-                        if last_lead and current_lead and current_lead != last_lead:
+                        last_poll_title = seen.get("current_poll_title")
+                        has_votes = any(c.get("pct", 0) > 0 for c in p_choices)
+
+                        # Si le titre du sondage a changé, mettre à jour le titre actuel sans fausse alerte de flip
+                        if p_title and last_poll_title != p_title:
+                            seen["current_poll_title"] = p_title
+                            seen["last_poll_leader"] = current_lead if has_votes else None
+                            save_seen(seen)
+                        elif has_votes and last_lead and current_lead and current_lead != last_lead:
                             flip_lines = [
                                 "🗳️ <b>CHANGEMENT DE LEADER DANS LE VOTE GTA 6 !</b> 🗳️\n",
                                 f"🔥 <b>{html.escape(current_lead)}</b> vient de devancer <b>{html.escape(last_lead)}</b> !\n",
@@ -1632,7 +1707,7 @@ async def monitor_loop():
                             asyncio.create_task(delete_after_delay(client, channel, sent_flip.id, 180))
                             seen["last_poll_leader"] = current_lead
                             save_seen(seen)
-                        elif not last_lead and current_lead:
+                        elif has_votes and not last_lead and current_lead:
                             seen["last_poll_leader"] = current_lead
                             save_seen(seen)
                     except Exception as e:
