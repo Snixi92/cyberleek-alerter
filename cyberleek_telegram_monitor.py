@@ -75,6 +75,7 @@ if sys.stdout.encoding != 'utf-8':
 API_ID = int(os.environ.get("TELEGRAM_API_ID", "32755876"))
 API_HASH = os.environ.get("TELEGRAM_API_HASH", "d7c46be11bfc28c9825330b26310ceb0")
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8985354063:AAHp-c4YNe0YI9Is0IeplCgXmz0c-wYsxDg")
+TOKEN = BOT_TOKEN
 CHANNEL_ID = int(os.environ.get("TELEGRAM_CHANNEL_ID", "-1003932229737"))
 SESSION_STRING = os.environ.get("TELEGRAM_SESSION", "")
 
