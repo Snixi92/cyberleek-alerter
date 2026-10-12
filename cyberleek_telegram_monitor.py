@@ -386,8 +386,8 @@ def get_polls():
             switch_rpc()
     return []
 
-def capture_screenshot(section="content", leak=None, past_leeks=None):
-    """Prend une VRAIE capture d'écran du navigateur réel sur le site Cyberleek via Chrome CDP."""
+def capture_screenshot(section="content", leak=None, past_leeks=None, ann=None):
+    """Prend une capture d'écran du site Cyberleek via Chrome CDP ou fallback Pillow haute fidélité."""
     t0 = time.time()
     try:
         real_out = os.path.join(SCRIPT_DIR, "real_live_website_screenshot.png")
@@ -397,12 +397,32 @@ def capture_screenshot(section="content", leak=None, past_leeks=None):
             except Exception:
                 pass
         js_script = os.path.join(SCRIPT_DIR, "take_real_screenshot.js")
-        subprocess.run(["node", js_script, section], capture_output=True, timeout=30)
-        if os.path.exists(real_out) and os.path.getsize(real_out) > 1000:
-            print(f"[Vraie Capture Réelle] Screenshot ({section}) capturé en {time.time()-t0:.2f}s ({os.path.getsize(real_out)/1024:.1f} KB)", flush=True)
-            return real_out
+        if os.path.exists(js_script):
+            subprocess.run(["node", js_script, section], capture_output=True, timeout=30)
+            if os.path.exists(real_out) and os.path.getsize(real_out) > 1000:
+                print(f"[Vraie Capture Réelle] Screenshot ({section}) capturé en {time.time()-t0:.2f}s ({os.path.getsize(real_out)/1024:.1f} KB)", flush=True)
+                return real_out
     except Exception as e:
         print(f"[Screenshot Error] {e}", flush=True)
+
+    # Fallback résilient pour les annonces (notamment sur Render où Chrome n'est pas installé)
+    if section == "anns" or ann is not None:
+        try:
+            from render_announcement_card import render_announcement_card
+            ann_target = ann
+            if not ann_target:
+                anns = get_announcements_from_chain()
+                if anns:
+                    ann_target = anns[0]
+            if ann_target:
+                card_out = os.path.join(SCRIPT_DIR, "announcement_card.png")
+                res_path = render_announcement_card(ann_target, card_out)
+                if res_path and os.path.exists(res_path) and os.path.getsize(res_path) > 1000:
+                    print(f"[Annonce Card Fallback] Image d'annonce cyberpunk générée en {time.time()-t0:.2f}s ({os.path.getsize(res_path)/1024:.1f} KB)", flush=True)
+                    return res_path
+        except Exception as e_card:
+            print(f"[Annonce Card Fallback Error] {e_card}", flush=True)
+
     return None
 
 def update_last_channel_id(msg_id):
@@ -555,7 +575,7 @@ async def send_announcement_alert(client, channel, ann):
     ann_text = "\n".join(ann_lines)
     
     print(f"\n[ANNONCE DÉTECTÉE] Publication de l'annonce '{title_en}'...", flush=True)
-    screen_path = await asyncio.to_thread(capture_screenshot, "anns")
+    screen_path = await asyncio.to_thread(capture_screenshot, "anns", ann=ann)
     if screen_path and os.path.exists(screen_path):
         caption = ann_text
         if len(caption) <= 1024:
@@ -715,6 +735,68 @@ def format_leak_message(leak):
     text, _ = format_leak_message_and_buttons(leak)
     return text
 
+def is_valid_binary_media_or_archive(file_path):
+    """
+    Vérifie rigoureusement qu'un fichier téléchargé est un binaire valide (vrai ZIP, vidéo, archive, image)
+    et rejette catégoriquement toute page d'erreur HTML, suppression ou fichier corrompu.
+    """
+    if not file_path or not os.path.exists(file_path):
+        return False, None
+    try:
+        size = os.path.getsize(file_path)
+    except Exception:
+        return False, None
+    if size < 20:
+        return False, None
+
+    try:
+        with open(file_path, 'rb') as f:
+            header = f.read(2048)
+        header_lower = header.lower()
+
+        # 1. Rejet absolu si le fichier contient des balises HTML ou des messages d'erreur web
+        if (b'<!doctype html' in header_lower or 
+            b'<html' in header_lower or 
+            b'<head' in header_lower or 
+            b'<body' in header_lower or 
+            b'<script' in header_lower or
+            b'<div' in header_lower or
+            b'<p>' in header_lower or
+            b'download limit' in header_lower or
+            b'not found' in header_lower or
+            b'forbidden' in header_lower or
+            b'\xd1\x84\xd0\xb0\xd0\xb9\xd0\xbb' in header_lower): # "файл"
+            return False, "html"
+
+        # 2. Vérification ZIP stricte (via zipfile.is_zipfile)
+        if zipfile.is_zipfile(file_path):
+            return True, "zip"
+
+        # 3. Vérification des magic bytes d'archives ou médias
+        if header.startswith(b'PK\x03\x04') or header.startswith(b'PK\x05\x06'):
+            return True, "zip"
+        if header.startswith(b'7z\xbc\xaf\x27\x1c'):
+            return True, "7z"
+        if header.startswith(b'Rar!\x1a\x07'):
+            return True, "rar"
+        if b'ftyp' in header[:32] or (header.startswith(b'\x00\x00\x00') and b'moov' in header[:64]):
+            return True, "video"
+        if header.startswith(b'\x1a\x45\xdf\xa3'): # MKV / WebM
+            return True, "video"
+        if header.startswith(b'RIFF') and b'AVI ' in header[:16]:
+            return True, "video"
+        if header.startswith(b'\xff\xd8\xff'): # JPEG
+            return True, "image"
+        if header.startswith(b'\x89PNG\r\n\x1a\n'): # PNG
+            return True, "image"
+
+        # 4. Si la taille est substantielle (> 50 KB) et sans aucune balise HTML
+        if size > 50 * 1024 and not any(tag in header_lower for tag in [b'<html', b'<body', b'<!doctype', b'<title']):
+            return True, "binary"
+    except Exception:
+        pass
+    return False, None
+
 def download_bedrive(url, dest):
     """
     Contourne automatiquement l'antibot de Bedrive.ru (résolution automatique
@@ -764,15 +846,26 @@ def download_bedrive(url, dest):
                 file_req = urllib.request.Request(url, headers=headers)
                 with opener.open(file_req, timeout=60) as file_resp, open(dest, 'wb') as f_out:
                     shutil.copyfileobj(file_resp, f_out)
-                if os.path.exists(dest) and os.path.getsize(dest) > 1024:
-                    return True
         else:
             with open(dest, 'wb') as f_out:
                 f_out.write(raw_content)
-            if os.path.exists(dest) and os.path.getsize(dest) > 1024:
+
+        if os.path.exists(dest):
+            is_valid, kind = is_valid_binary_media_or_archive(dest)
+            if is_valid:
                 return True
+            else:
+                try:
+                    os.remove(dest)
+                except Exception:
+                    pass
     except Exception as e:
         print(f"[Bedrive Downloader Notice] {e}", flush=True)
+        if os.path.exists(dest):
+            try:
+                os.remove(dest)
+            except Exception:
+                pass
     return False
 
 async def process_and_send_leak_media(client, channel, leak, reply_to_id=None, auto_delete_delay=None):
@@ -799,11 +892,25 @@ async def process_and_send_leak_media(client, channel, leak, reply_to_id=None, a
         for f in sorted(files):
             full_p = os.path.join(root, f)
             if any(f.lower().endswith(ext) for ext in [".mp4", ".mkv", ".mov", ".webm", ".avi"]):
-                if not saved_video:
-                    saved_video = full_p
+                is_valid, kind = is_valid_binary_media_or_archive(full_p)
+                if is_valid and kind in ["video", "binary"]:
+                    if not saved_video:
+                        saved_video = full_p
+                else:
+                    try:
+                        os.remove(full_p)
+                    except Exception:
+                        pass
             elif f.lower().endswith(".zip"):
-                if not saved_zip:
-                    saved_zip = full_p
+                is_valid, kind = is_valid_binary_media_or_archive(full_p)
+                if is_valid and kind == "zip":
+                    if not saved_zip:
+                        saved_zip = full_p
+                else:
+                    try:
+                        os.remove(full_p)
+                    except Exception:
+                        pass
 
     # Si nous avons déjà les fichiers en base locale, les envoyer directement !
     if saved_video or saved_zip:
@@ -894,52 +1001,71 @@ async def process_and_send_leak_media(client, channel, leak, reply_to_id=None, a
                 # Essai Bedrive si applicable
                 if "bedrive.ru" in u.lower():
                     if download_bedrive(u, dest):
-                        downloaded_file = dest
-                        file_size_mb = os.path.getsize(dest) / (1024 * 1024)
-                        print(f"[Media Leak] Téléchargement Bedrive réussi ({file_size_mb:.2f} Mo) !", flush=True)
-                        break
+                        is_valid, kind = is_valid_binary_media_or_archive(dest)
+                        if is_valid:
+                            downloaded_file = dest
+                            file_size_mb = os.path.getsize(dest) / (1024 * 1024)
+                            print(f"[Media Leak] Téléchargement Bedrive réussi ({file_size_mb:.2f} Mo) [type: {kind}] !", flush=True)
+                            break
+                        else:
+                            try:
+                                os.remove(dest)
+                            except Exception:
+                                pass
 
                 # Essai téléchargement HTTP direct
                 req = urllib.request.Request(u, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
                 with urllib.request.urlopen(req, timeout=45) as resp, open(dest, 'wb') as f_out:
                     shutil.copyfileobj(resp, f_out)
 
-                if os.path.exists(dest) and os.path.getsize(dest) > 1024:
-                    with open(dest, 'rb') as f_chk:
-                        prefix = f_chk.read(512).lower()
-                        if b'<!doctype html' in prefix or b'<html' in prefix:
-                            if b'download limit' in prefix or b'forbidden' in prefix or b'not found' in prefix:
-                                os.remove(dest)
-                                continue
+                if os.path.exists(dest):
+                    is_valid, kind = is_valid_binary_media_or_archive(dest)
+                    if not is_valid:
+                        print(f"[Media Leak] Rejet du fichier téléchargé depuis {u} (fichier invalide ou page HTML).", flush=True)
+                        try:
+                            os.remove(dest)
+                        except Exception:
+                            pass
+                        continue
                     downloaded_file = dest
                     file_size_mb = os.path.getsize(dest) / (1024 * 1024)
-                    print(f"[Media Leak] Téléchargement réussi ({file_size_mb:.2f} Mo) !", flush=True)
+                    print(f"[Media Leak] Téléchargement réussi ({file_size_mb:.2f} Mo) [type: {kind}] !", flush=True)
                     break
             except Exception as e_dl:
                 print(f"[Media Leak] Échec sur ce miroir ({u}) : {e_dl}", flush=True)
+                if os.path.exists(dest):
+                    try:
+                        os.remove(dest)
+                    except Exception:
+                        pass
 
         if not downloaded_file:
-            print("[Media Leak] Aucun fichier n'a pu être téléchargé depuis les miroirs.", flush=True)
+            print("[Media Leak] Aucun fichier binaire valide n'a pu être téléchargé depuis les miroirs.", flush=True)
+            mirror_links_text = ""
+            if candidate_urls:
+                valid_links = [f"• <a href='{u}'>{u[:55]}...</a>" if len(u) > 55 else f"• <a href='{u}'>{u}</a>" for u in candidate_urls[:4]]
+                mirror_links_text = "\n\n🔗 <b>Liens directs des miroirs :</b>\n" + "\n".join(valid_links)
+            notice_text = (
+                f"⚠️ <b>Information média du leak :</b>\n"
+                f"<i>Le fichier original (.zip ou vidéo) n'a pas pu être récupéré automatiquement "
+                f"car les hébergeurs temporaires externes (Temp.sh, Bedrive, etc.) ont expiré ou supprimé l'archive.</i>"
+                f"{mirror_links_text}"
+            )
+            err_msg = await client.send_message(
+                channel,
+                message=notice_text,
+                parse_mode='html',
+                reply_to=reply_to_id,
+                link_preview=False
+            )
             if auto_delete_delay:
-                err_msg = await client.send_message(
-                    channel,
-                    message="⚠️ <i>Le fichier original de ce leak n'a pas pu être téléchargé automatiquement (les liens temporaires externes ont expiré ou sont hors-ligne). Veuillez utiliser les liens directs de téléchargement ci-dessus.</i>",
-                    parse_mode='html',
-                    reply_to=reply_to_id
-                )
                 asyncio.create_task(delete_after_delay(client, channel, err_msg.id, auto_delete_delay))
             return
 
-        is_zip = False
-        try:
-            with open(downloaded_file, 'rb') as f_check:
-                header = f_check.read(4)
-                if header.startswith(b'PK\x03\x04'):
-                    is_zip = True
-        except Exception:
-            pass
+        is_valid, kind = is_valid_binary_media_or_archive(downloaded_file)
+        is_zip = (kind == "zip")
 
-        if is_zip or downloaded_file.lower().endswith('.zip'):
+        if is_zip:
             pwd_bytes = pwd.encode('utf-8') if pwd else None
             extracted_dir = os.path.join(leak_dir, "extracted")
             os.makedirs(extracted_dir, exist_ok=True)
@@ -961,8 +1087,10 @@ async def process_and_send_leak_media(client, channel, leak, reply_to_id=None, a
 
             for root, _, files in os.walk(extracted_dir):
                 for f in sorted(files):
-                    if any(f.lower().endswith(ext) for ext in [".mp4", ".mkv", ".mov", ".webm", ".avi", ".png", ".jpg"]):
-                        media_extracted = os.path.join(root, f)
+                    f_full = os.path.join(root, f)
+                    is_f_valid, f_kind = is_valid_binary_media_or_archive(f_full)
+                    if is_f_valid and f_kind in ["video", "image", "binary"]:
+                        media_extracted = f_full
                         break
                 if media_extracted:
                     break
@@ -1020,7 +1148,7 @@ async def process_and_send_leak_media(client, channel, leak, reply_to_id=None, a
                 asyncio.create_task(delete_after_delay(client, channel, msg_z.id, auto_delete_delay))
             print("[Media Leak] Archive .ZIP envoyée avec succès !", flush=True)
 
-        else:
+        elif kind in ["video", "image", "binary"]:
             raw_size_mb = os.path.getsize(downloaded_file) / (1024 * 1024)
             file_cap = (
                 f"🎬 <b>Fichier original du leak</b> : <code>{title}</code>\n"
