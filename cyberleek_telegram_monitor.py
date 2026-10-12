@@ -36,112 +36,17 @@ class HealthHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def do_GET(self):
-        clean_path = self.path.split('?')[0].rstrip('/')
-        if not clean_path:
-            clean_path = '/'
-
-        if clean_path in ['/health', '/ping']:
-            body = b"CYBERLEEK MONITOR ONLINE 24/7 OK"
-            self.send_response(200)
-            self.send_header('Content-Type', 'text/plain; charset=utf-8')
-            self.send_header('Content-Length', str(len(body)))
-            self.send_header('Connection', 'close')
-            self.end_headers()
-            self.wfile.write(body)
-            return
-
-        elif clean_path == '/api/stats':
-            try:
-                crypto = get_crypto_stats()
-                p_text, p_alert = format_polls_message()
-                poll_info = None
-                if p_alert and len(p_alert) >= 5:
-                    choices = p_alert[4]
-                    if choices:
-                        leader_choice, leader_pct = choices[0]
-                        poll_info = {
-                            "title": p_alert[0],
-                            "status": p_alert[1],
-                            "countdown": p_alert[3],
-                            "leader": leader_choice,
-                            "pct": leader_pct
-                        }
-                data = {
-                    "crypto": crypto,
-                    "poll": poll_info,
-                    "mirrors": [{"status": s, "url": u} for s, u in check_mirrors()]
-                }
-                body = json.dumps(data, ensure_ascii=False).encode('utf-8')
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/json; charset=utf-8')
-                self.send_header('Content-Length', str(len(body)))
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.send_header('Connection', 'close')
-                self.end_headers()
-                self.wfile.write(body)
-                return
-            except Exception as e:
-                err_b = json.dumps({"error": str(e)}).encode('utf-8')
-                self.send_response(500)
-                self.send_header('Content-Type', 'application/json')
-                self.send_header('Content-Length', str(len(err_b)))
-                self.send_header('Connection', 'close')
-                self.end_headers()
-                self.wfile.write(err_b)
-                return
-
-        elif clean_path == '/api/leaks':
-            hub_json_path = os.path.join(SCRIPT_DIR, "leaks_database.json")
-            if os.path.exists(hub_json_path):
-                with open(hub_json_path, 'rb') as f:
-                    body = f.read()
-            else:
-                body = b"[]"
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json; charset=utf-8')
-            self.send_header('Content-Length', str(len(body)))
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.send_header('Connection', 'close')
-            self.end_headers()
-            self.wfile.write(body)
-            return
-
-        elif clean_path == '/mascot.png':
-            mascot_file = os.path.join(SCRIPT_DIR, "mascot.png")
-            if os.path.exists(mascot_file):
-                with open(mascot_file, 'rb') as f:
-                    body = f.read()
-                self.send_response(200)
-                self.send_header('Content-Type', 'image/png')
-                self.send_header('Content-Length', str(len(body)))
-                self.send_header('Connection', 'close')
-                self.end_headers()
-                self.wfile.write(body)
-                return
-
-        # Par défaut : servir le Hub GTA 6 (Mini App)
-        hub_path = os.path.join(SCRIPT_DIR, "hub.html")
-        if os.path.exists(hub_path):
-            with open(hub_path, 'rb') as f:
-                body = f.read()
-            self.send_response(200)
-            self.send_header('Content-Type', 'text/html; charset=utf-8')
-            self.send_header('Content-Length', str(len(body)))
-            self.send_header('Connection', 'close')
-            self.end_headers()
-            self.wfile.write(body)
-        else:
-            body = b"CYBERLEEK MONITOR ONLINE 24/7 OK"
-            self.send_response(200)
-            self.send_header('Content-Type', 'text/plain; charset=utf-8')
-            self.send_header('Content-Length', str(len(body)))
-            self.send_header('Connection', 'close')
-            self.end_headers()
-            self.wfile.write(body)
+        body = b"CYBERLEEK MONITOR ONLINE 24/7 OK"
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/plain; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Connection', 'close')
+        self.end_headers()
+        self.wfile.write(body)
 
     def do_HEAD(self):
         self.send_response(200)
-        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Type', 'text/plain; charset=utf-8')
         self.send_header('Content-Length', '32')
         self.send_header('Connection', 'close')
         self.end_headers()
@@ -153,7 +58,7 @@ def start_health_server():
     port = int(os.environ.get("PORT", 10000))
     try:
         server = ThreadingHTTPServer(("0.0.0.0", port), HealthHandler)
-        print(f"[HealthCheck] Serveur HTTP multithreadé actif sur le port {port} (pour Render / UptimeRobot / Mini App)", flush=True)
+        print(f"[HealthCheck] Serveur HTTP multithreadé actif sur le port {port} (pour Render / UptimeRobot)", flush=True)
         server.serve_forever()
     except Exception as e:
         print(f"[HealthCheck Notice] {e}", flush=True)
@@ -1212,7 +1117,6 @@ async def monitor_loop():
             scope=BotCommandScopeDefault(),
             lang_code='fr',
             commands=[
-                BotCommand(command='hub', description="Ouvrir la Mini App privée GTA 6 Vault"),
                 BotCommand(command='help', description="Afficher l'aide et la liste des commandes"),
                 BotCommand(command='crypto', description="Prix et Market Cap de $CYBERLEEK"),
                 BotCommand(command='votes', description="Résultats du sondage GTA 6 en direct"),
@@ -1254,28 +1158,11 @@ async def monitor_loop():
                 print(f"[Erreur envoi/auto-delete réponse] {e_rep}", flush=True)
 
         try:
-            if cmd in ['/hub', '/app', '/vault']:
-                hub_url = "https://cyberleek-alerter.onrender.com"
-                hub_text = (
-                    "🕹️ <b>CYBERLEEK GTA 6 VAULT // MINI APP</b>\n\n"
-                    "Accédez à l'application web privée inspirée de l'interface Cyberleek :\n"
-                    "  • 🔍 Recherche instantanée par nom ou vidéo\n"
-                    "  • 🔑 Copie en 1-clic des mots de passe d'archives\n"
-                    "  • ⚡ Accès direct aux 21 leaks et miroirs rapides\n"
-                    "  • 📊 Stats $CYBERLEEK, sondage et statut des miroirs en direct\n\n"
-                    "Cliquez sur le bouton ci-dessous pour lancer le Vault :"
-                )
-                hub_btn = [
-                    [Button.url("🚀 Ouvrir le Vault GTA 6 🚀", hub_url)]
-                ]
-                await reply_and_auto_delete(hub_text, buttons=hub_btn, delay=60)
-
-            elif cmd in ['/start', '/help']:
+            if cmd in ['/start', '/help']:
                 help_text = (
                     "🤖 <b>CYBERLEEK ALERTER BOT</b> 🤖\n\n"
                     "Surveillance autonome 24h/24 du site Cyberleek et de la blockchain Solana.\n\n"
                     "📌 <b>Commandes disponibles :</b>\n"
-                    "  • 🚀 /hub - Ouvrir la Mini App privée GTA 6 Vault (Recherche & Miroirs)\n"
                     "  • 🪙 /crypto - Cours, Market Cap et volume du token $CYBERLEEK\n"
                     "  • 📊 /votes - Résultats du sondage officiel GTA 6 et date de fin\n"
                     "  • 🚨 /leaks - Dernier leak officiel détecté avec liens directs\n"
