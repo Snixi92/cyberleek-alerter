@@ -26,7 +26,7 @@ import html
 import http.cookiejar
 import zlib
 from telethon import TelegramClient, types, errors, events, Button
-from telethon.sessions import StringSession
+from telethon.sessions import StringSession, MemorySession
 from telethon.errors import MessageNotModifiedError
 from telethon.tl.functions.bots import SetBotCommandsRequest
 from telethon.tl.types import BotCommand, BotCommandScopeDefault
@@ -85,7 +85,7 @@ API_HASH = os.environ.get("TELEGRAM_API_HASH", "d7c46be11bfc28c9825330b26310ceb0
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8985354063:AAHp-c4YNe0YI9Is0IeplCgXmz0c-wYsxDg")
 TOKEN = BOT_TOKEN
 CHANNEL_ID = int(os.environ.get("TELEGRAM_CHANNEL_ID", "-1003932229737"))
-SESSION_STRING = os.environ.get("TELEGRAM_SESSION", "1BJWap1sBu25uEm8VyH6KA6h5pVGURJMc5AnAT-xMEyoxY3bRTOWy7RaLDNS230FtimEHrMZV2kLGYaNLFLY0JtEZb6dbRaijJFPS2a8VPcxneG3GSD7ss4vF1rvzdOJNeiRsxSEmZu7f74L0OHKsIbXxOZiex056xmOgFpCZiS2uF7YFek0bsMJR2NTWDWmPGLPekwrNMzH9EU2d4fW1O1vj7_4QYb6tAre-3KVMJcE6L4-yiBSoMYbxdukD0h8wDEqx76TK18nnjhacgyV2c8pXkwo-u77ThL6vSHzMzav6_ISS5fHvjLoXfFsuQmGjJ2iYr4UmRb0-hrq24pPI3YWwxeYsl7g=")
+SESSION_STRING = os.environ.get("TELEGRAM_SESSION", "")
 
 
 
@@ -1479,7 +1479,7 @@ async def monitor_loop():
     print("=== DÉMARRAGE DU MONITOR CYBERLEEK AUTONOME ===", flush=True)
     seen = load_seen()
 
-    session = StringSession(SESSION_STRING) if SESSION_STRING else "bot_session"
+    session = StringSession(SESSION_STRING) if SESSION_STRING else MemorySession()
     client = TelegramClient(session, API_ID, API_HASH)
     while True:
         try:
@@ -1882,6 +1882,19 @@ async def monitor_loop():
 
     while True:
         try:
+            if not client.is_connected():
+                print("[Telegram Connexion] Déconnecté de Telegram ! Reconnexion en cours...", flush=True)
+                try:
+                    await client.connect()
+                    if not await client.is_user_authorized():
+                        await client.start(bot_token=BOT_TOKEN)
+                    channel = await client.get_entity(CHANNEL_ID)
+                    print("[Telegram Connexion] Reconnecté avec succès !", flush=True)
+                except Exception as e_recon:
+                    print(f"[Telegram Erreur Reconnexion] {e_recon}", flush=True)
+                    await asyncio.sleep(3)
+                    continue
+
             now = time.time()
 
             # 0. GESTION PERSISTANTE DES SUPPRESSIONS ÉPHÉMÈRES (toutes les 1.5s)
@@ -1943,6 +1956,11 @@ async def monitor_loop():
                             last_crypto_fp = crypto_fp
                         except Exception as e:
                             print(f"[Erreur edit crypto] {e}", flush=True)
+                            if "disconnected" in str(e).lower():
+                                try:
+                                    await client.connect()
+                                except Exception:
+                                    pass
 
                 # Vérification des changements de paliers de Market Cap (hausse ou baisse, notif éphémère de 45s)
                 try:
@@ -2016,6 +2034,11 @@ async def monitor_loop():
                             last_polls_fp = polls_fp
                         except Exception as e:
                             print(f"[Erreur edit votes] {e}", flush=True)
+                            if "disconnected" in str(e).lower():
+                                try:
+                                    await client.connect()
+                                except Exception:
+                                    pass
 
                     # Vérification de renversement de leader dans le vote sans relancer de subprocess
                     try:
@@ -2070,6 +2093,11 @@ async def monitor_loop():
                             last_mirrors_fp = mirrors_fp
                         except Exception as e:
                             print(f"[Erreur edit miroirs] {e}", flush=True)
+                            if "disconnected" in str(e).lower():
+                                try:
+                                    await client.connect()
+                                except Exception:
+                                    pass
 
             # 6. BALAYAGE DE SÉCURITÉ DU CANAL (toutes les 60s)
             if now - last_sanitize_check >= 60:
@@ -2079,6 +2107,13 @@ async def monitor_loop():
             await asyncio.sleep(1.5)
         except Exception as e:
             print(f"[Erreur boucle monitor] {e}", flush=True)
+            if "disconnected" in str(e).lower() or isinstance(e, ConnectionError):
+                try:
+                    await client.connect()
+                    if not await client.is_user_authorized():
+                        await client.start(bot_token=BOT_TOKEN)
+                except Exception:
+                    pass
             await asyncio.sleep(5)
 
 if __name__ == "__main__":
