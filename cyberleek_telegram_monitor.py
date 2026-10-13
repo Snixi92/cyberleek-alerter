@@ -65,10 +65,17 @@ def start_health_server():
         print(f"[HealthCheck Notice] {e}", flush=True)
 
 
-# Forcer UTF-8 sur Windows
-if sys.stdout.encoding != 'utf-8':
+# Forcer UTF-8 sur Windows (supporte pythonw et services silencieux)
+if sys.stdout is not None:
     try:
-        sys.stdout.reconfigure(encoding='utf-8')
+        if getattr(sys.stdout, 'encoding', None) != 'utf-8':
+            sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+else:
+    try:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
     except Exception:
         pass
 
@@ -83,11 +90,18 @@ SESSION_STRING = os.environ.get("TELEGRAM_SESSION", "")
 
 
 # Endpoints & Solana Protocol
-RPC_ENDPOINTS = [
-    "https://api.mainnet-beta.solana.com",
-    "https://public.rpc.solanavibestation.com",
-    "https://solana.api.pocket.network"
-]
+SIMULATOR_MODE = "--sim" in sys.argv or "--simulator" in sys.argv or os.environ.get("SIMULATOR_MODE") == "1"
+if SIMULATOR_MODE or os.environ.get("SOLANA_RPC_URL"):
+    sim_port = os.environ.get("SIM_PORT", "8080")
+    sim_rpc = os.environ.get("SOLANA_RPC_URL", f"http://localhost:{sim_port}/rpc")
+    RPC_ENDPOINTS = [sim_rpc]
+    print(f"⚡ [SIMULATOR MODE ACTIF] Connecté au clone local : {sim_rpc}", flush=True)
+else:
+    RPC_ENDPOINTS = [
+        "https://api.mainnet-beta.solana.com",
+        "https://public.rpc.solanavibestation.com",
+        "https://solana.api.pocket.network"
+    ]
 current_rpc_idx = 0
 
 PROGRAM_ID = "7rAgHPLDc9NryZmNdeEzyDui6D9PHkvTxMjKhNSa7w3a"
@@ -103,7 +117,8 @@ DISCRIMINATORS = {
 MIRRORS = [
     "https://cyberleek.ar.perma.online/",
     "https://wayfinder.vilenarios.com/?q=cyberleek",
-    "https://cyberleek.saiph.weavegate.net/"
+    "https://cyberleek.saiph.weavegate.net/",
+    "https://cyberleek.gatewaypie.com/"
 ]
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -274,9 +289,12 @@ last_known_crypto = {"price": 0.0027, "mcap": 1950000.0, "vol24h": 370000.0, "ch
 
 def get_crypto_stats():
     global last_known_crypto
-    # 1. DexScreener (avec prix en direct et vrai priceChange 24h)
     try:
-        url = f"https://api.dexscreener.com/latest/dex/tokens/{TOKEN_ADDRESS}"
+        if SIMULATOR_MODE:
+            sim_port = os.environ.get("SIM_PORT", "8080")
+            url = f"http://localhost:{sim_port}/dex/tokens/{TOKEN_ADDRESS}"
+        else:
+            url = os.environ.get("DEXSCREENER_URL") or f"https://api.dexscreener.com/latest/dex/tokens/{TOKEN_ADDRESS}"
         req = urllib.request.Request(url, headers={
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'application/json'
@@ -402,14 +420,18 @@ def capture_screenshot(section="content", leak=None, past_leeks=None, ann=None):
                 pass
         js_script = os.path.join(SCRIPT_DIR, "take_real_screenshot.js")
         if os.path.exists(js_script):
-            active_url = "https://cyberleek.gatewaypie.com/"
-            try:
-                for status, u in check_mirrors():
-                    if status == "🟢":
-                        active_url = u
-                        break
-            except Exception:
-                pass
+            if SIMULATOR_MODE or os.environ.get("CYBERLEEK_SITE_URL"):
+                sim_port = os.environ.get("SIM_PORT", "8080")
+                active_url = os.environ.get("CYBERLEEK_SITE_URL", f"http://localhost:{sim_port}/")
+            else:
+                active_url = "https://cyberleek.gatewaypie.com/"
+                try:
+                    for status, u in check_mirrors():
+                        if status == "🟢":
+                            active_url = u
+                            break
+                except Exception:
+                    pass
 
             subprocess.run(["node", js_script, section, active_url], capture_output=True, timeout=35)
             if os.path.exists(real_out) and os.path.getsize(real_out) > 1000:
@@ -654,9 +676,29 @@ def format_mirrors_message():
     mirrors = check_mirrors()
     for status, u in mirrors:
         domain = u.replace("https://", "").replace("/", "")
-        mirror_lines.append(f"  {status} <code>{domain}</code>")
+        mirror_lines.append(f'  {status} <a href="{u}"><b>{domain}</b></a>')
+    mirror_lines.append("\n<i>👆 Cliquez directement sur un lien ou un bouton ci-dessous :</i>")
     fingerprint = tuple((s, u) for s, u in mirrors)
     return "\n".join(mirror_lines), fingerprint
+
+def get_mirrors_buttons():
+    btn_list = []
+    for u in MIRRORS:
+        if "gatewaypie" in u:
+            lbl = "🌐 Gatewaypie"
+        elif "perma" in u or "arweave" in u:
+            lbl = "🌐 Arweave"
+        elif "wayfinder" in u:
+            lbl = "🌐 Wayfinder"
+        elif "weavegate" in u or "saiph" in u:
+            lbl = "🌐 Weavegate"
+        else:
+            lbl = "🌐 Miroir"
+        btn_list.append(Button.url(lbl, u))
+    rows = []
+    for i in range(0, len(btn_list), 2):
+        rows.append(btn_list[i:i+2])
+    return rows
 
 def format_crypto_message():
     crypto = get_crypto_stats()
@@ -674,23 +716,31 @@ def format_crypto_message():
 
 def format_polls_message():
     p = None
-    try:
-        js_p = os.path.join(SCRIPT_DIR, "get_poll_data.js")
-        if os.path.exists(js_p):
-            proc = subprocess.run(["node", js_p], capture_output=True, text=True, timeout=10)
-            if proc.returncode == 0 and proc.stdout.strip():
-                p = json.loads(proc.stdout.strip())
-    except Exception:
-        p = None
-
-    # Fallback natif Python 100% autonome (utilise get_polls direct sur RPC Solana)
-    if not p:
+    if SIMULATOR_MODE:
         try:
             polls = get_polls()
             if polls:
                 p = polls[0]
-        except Exception as e_gp:
-            print(f"[Fallback get_polls] {e_gp}", flush=True)
+        except Exception:
+            pass
+    else:
+        try:
+            js_p = os.path.join(SCRIPT_DIR, "get_poll_data.js")
+            if os.path.exists(js_p):
+                proc = subprocess.run(["node", js_p], capture_output=True, text=True, timeout=10)
+                if proc.returncode == 0 and proc.stdout.strip():
+                    p = json.loads(proc.stdout.strip())
+        except Exception:
+            p = None
+
+        # Fallback natif Python 100% autonome (utilise get_polls direct sur RPC Solana)
+        if not p:
+            try:
+                polls = get_polls()
+                if polls:
+                    p = polls[0]
+            except Exception as e_gp:
+                print(f"[Fallback get_polls] {e_gp}", flush=True)
 
     if not p:
         return "", None
@@ -789,7 +839,10 @@ def format_leak_message_and_buttons(leak):
         if not url or not (url.startswith("http://") or url.startswith("https://")):
             continue
         btn_txt = format_leak_btn_label(lbl, url)
-        buttons.append(Button.url(btn_txt, url))
+        btn_url = url
+        if "localhost" in btn_url or "127.0.0.1" in btn_url:
+            btn_url = "https://cyberleek.gatewaypie.com/"
+        buttons.append(Button.url(btn_txt, btn_url))
 
     keyboard_rows = []
     for i in range(0, len(buttons), 2):
@@ -1041,7 +1094,9 @@ async def process_and_send_leak_media(client, channel, leak, reply_to_id=None, a
         if not u:
             continue
         u_lower = u.lower()
-        if any(gw in u_lower for gw in ["arweave.net", "vilenarios.com", "turbo-gateway.com", "ar.io", "permaweb.app"]):
+        if "localhost" in u_lower or "127.0.0.1" in u_lower:
+            candidate_urls.insert(0, u)
+        elif any(gw in u_lower for gw in ["arweave.net", "vilenarios.com", "turbo-gateway.com", "ar.io", "permaweb.app"]):
             candidate_urls.insert(0, u)
         elif any(u_lower.endswith(ext) for ext in [".mp4", ".zip", ".png", ".jpg", ".mkv", ".webm"]):
             candidate_urls.insert(0, u)
@@ -1260,7 +1315,7 @@ async def send_telegram_alert(client, channel, leak, past_leeks=None):
         print("[Initialisation des messages de statut permanents...]", flush=True)
         try:
             mirrors_text, _ = format_mirrors_message()
-            msg_mirrors = await client.send_message(channel, message=mirrors_text, parse_mode='html')
+            msg_mirrors = await client.send_message(channel, message=mirrors_text, buttons=get_mirrors_buttons(), link_preview=False, parse_mode='html')
             active_msgs["mirrors"] = msg_mirrors.id
             await asyncio.sleep(0.4)
 
@@ -1308,7 +1363,7 @@ async def monitor_loop():
     print("=== DÉMARRAGE DU MONITOR CYBERLEEK AUTONOME ===", flush=True)
     seen = load_seen()
 
-    session = StringSession(SESSION_STRING) if SESSION_STRING else StringSession()
+    session = StringSession(SESSION_STRING) if SESSION_STRING else "bot_session"
     client = TelegramClient(session, API_ID, API_HASH)
     while True:
         try:
@@ -1347,8 +1402,190 @@ async def monitor_loop():
     # 2. Gestionnaire interactif pour répondre à toutes les commandes (Auto-suppression après 1 min)
     @client.on(events.NewMessage)
     async def handle_bot_commands(event):
-        raw = (event.raw_text or event.text or "").strip()
+        raw = (event.message.raw_text or event.message.text or "").strip()
+
+        async def handle_direct_leak_transfer(event):
+            text = (event.message.raw_text or event.message.text or "").strip()
+            has_media = bool(event.message.media)
+            has_fwd = bool(event.message.fwd_from)
+
+            url_matches = re.findall(r'https?://[^\s<>"]+', text)
+
+            is_leak_submission = (
+                has_media or 
+                has_fwd or 
+                bool(url_matches) or 
+                any(k in text.lower() for k in ["gta", "leak", "leek", "cyberleek", "rockstar", "build", "footage", "video", "source", "password", "mega", "arweave", "temp.sh", "bedrive", "telecharger", "download"])
+            )
+
+            if not is_leak_submission and len(text) < 60:
+                await event.reply(
+                    "👋 <b>Bonjour !</b>\n\n"
+                    "Pour publier un <b>nouveau leak</b> directement sur le canal officiel 🚨 Cyberleek Alerter 🚨 :\n"
+                    "• 📁 <b>Envoie ou transfère-moi le fichier</b> (vidéo MP4, archive ZIP, document).\n"
+                    "• 🔗 <b>Ou transfère-moi le message</b> contenant les détails et liens de téléchargement.\n"
+                    "• 🔑 Si l'archive nécessite un mot de passe, indique-le dans ton message (ex: <code>password: mon_mdp</code>).\n\n"
+                    "⚡ <i>Je m'occupe automatiquement d'extraire la vidéo en qualité 100% brute d'origine et de publier l'alerte sur le canal !</i>",
+                    parse_mode='html'
+                )
+                return
+
+            print(f"\n📥 [TRANSFERT DIRECT DE LEAK REÇU EN MP]", flush=True)
+            print(f"  • Utilisateur ID: {event.sender_id}", flush=True)
+            print(f"  • Texte: {text[:100]}", flush=True)
+            print(f"  • Média: {has_media}, Transféré: {has_fwd}", flush=True)
+
+            status_msg = await event.reply("⏳ <b>Nouveau leak reçu en transfert direct !</b>\n<i>Traitement du fichier et préparation de la publication sur le canal...</i>", parse_mode='html')
+
+            # 1. Extraction du mot de passe si présent
+            pwd_match = re.search(r'(?:zip\s+)?password\s*:\s*([^\s,]+)', text, re.IGNORECASE)
+            pwd = pwd_match.group(1) if pwd_match else None
+
+            # 2. Titre du leak
+            lines = [l.strip() for l in text.split('\n') if l.strip()]
+            title = None
+            for l in lines:
+                if any(k in l.lower() for k in ["gta", "leak", "leek", "cyberleek", "build", "footage", "video", "source", "rockstar"]):
+                    clean_l = re.sub(r'^(?:titre|title|leak|leek)\s*:\s*', '', l, flags=re.IGNORECASE).strip()
+                    if clean_l:
+                        title = clean_l
+                        break
+            if not title and lines:
+                title = lines[0]
+            if not title:
+                f_name = getattr(event.message.file, 'name', None) if event.message.file else None
+                title = f_name.replace('_', ' ').replace('-', ' ').rsplit('.', 1)[0] if f_name else "CYBERLEEK EXCLUSIVE LEAK"
+
+            # 3. Liens trouvés dans le message
+            items = []
+            for u in url_matches:
+                lbl = "Télécharger"
+                if "bedrive" in u: lbl = "Bedrive Mirror"
+                elif "temp.sh" in u: lbl = "Temp.sh Mirror"
+                elif "arweave" in u or "ar.io" in u: lbl = "Arweave Mirror"
+                elif "mega.nz" in u: lbl = "Mega Mirror"
+                elif "gofile" in u: lbl = "Gofile Mirror"
+                items.append({"label": lbl, "url": u})
+
+            if not items:
+                items = [{"label": "Direct Download", "url": "https://cyberleek.gatewaypie.com/"}]
+
+            pubkey = f"Direct_{int(time.time())}_{event.sender_id}"
+            leak_obj = {
+                "title": title,
+                "timestamp": int(time.time()),
+                "items": items,
+                "pubkey": pubkey
+            }
+
+            # 4. Dossier de stockage
+            leak_dir = os.path.join(STORAGE_DIR, pubkey)
+            os.makedirs(leak_dir, exist_ok=True)
+
+            # 5. Si un média est joint directement dans le message Telegram
+            downloaded_path = None
+            if has_media:
+                await status_msg.edit("📥 <i>Téléchargement du fichier Telegram en cours (qualité 100% originale)...</i>", parse_mode='html')
+                downloaded_path = await client.download_media(event.message, file=leak_dir)
+                print(f"[Direct Transfer] Fichier Telegram téléchargé : {downloaded_path}", flush=True)
+
+                if downloaded_path and os.path.exists(downloaded_path):
+                    # Si c'est un ZIP, décompresser
+                    is_val, kind = is_valid_binary_media_or_archive(downloaded_path)
+                    if kind == "zip" or downloaded_path.lower().endswith(".zip"):
+                        await status_msg.edit("📦 <i>Archive ZIP détectée : Décompression automatique en cours...</i>", parse_mode='html')
+                        extracted_dir = os.path.join(leak_dir, "extracted")
+                        os.makedirs(extracted_dir, exist_ok=True)
+                        pwd_bytes = pwd.encode('utf-8') if pwd else None
+                        try:
+                            with zipfile.ZipFile(downloaded_path, 'r') as zf:
+                                if pwd_bytes: zf.setpassword(pwd_bytes)
+                                zf.extractall(extracted_dir)
+                        except Exception:
+                            if pwd:
+                                subprocess.run(["7z", "x", f"-p{pwd}", f"-o{extracted_dir}", downloaded_path], capture_output=True)
+                            else:
+                                subprocess.run(["7z", "x", f"-o{extracted_dir}", downloaded_path], capture_output=True)
+
+            # 6. Publication de l'alerte sur le canal officiel
+            await status_msg.edit("🚀 <i>Publication de l'alerte sur le canal 🚨 Cyberleek Alerter 🚨...</i>", parse_mode='html')
+            msg_leak = None
+            try:
+                leak_text, leak_buttons = format_leak_message_and_buttons(leak_obj)
+                msg_leak = await client.send_message(channel, message=leak_text, buttons=leak_buttons, parse_mode='html')
+                active_msgs = load_seen().get("active_msgs", {})
+                active_msgs["leak"] = msg_leak.id
+                seen = load_seen()
+                seen["active_msgs"] = active_msgs
+                save_seen(seen)
+                print(f"[Direct Transfer] Alerte envoyée sur le canal (ID: {msg_leak.id})", flush=True)
+            except Exception as e_send:
+                print(f"[Direct Transfer Alert Error] {e_send}", flush=True)
+
+            if msg_leak:
+                # Envoyer les médias en réponse directe
+                await status_msg.edit("🎬 <i>Téléversement de la vidéo originale et de l'archive sur le canal...</i>", parse_mode='html')
+                if has_media and (not downloaded_path or not downloaded_path.lower().endswith(".zip")):
+                    med_size_mb = (os.path.getsize(downloaded_path) / (1024*1024)) if (downloaded_path and os.path.exists(downloaded_path)) else 0
+                    vid_cap = (
+                        f"🎬 <b>Vidéo originale décompressée</b> : <code>{title}</code>\n"
+                        f"📁 <i>Fichier : {os.path.basename(downloaded_path) if downloaded_path else 'video.mp4'} ({med_size_mb:.2f} Mo)</i>\n"
+                        f"✨ <i>Qualité 100% brute d'origine (sans compression)</i>"
+                    )
+                    await client.send_file(
+                        channel,
+                        file=event.message.media,
+                        caption=vid_cap,
+                        parse_mode='html',
+                        force_document=True,
+                        reply_to=msg_leak.id
+                    )
+                else:
+                    await process_and_send_leak_media(client, channel, leak_obj, reply_to_id=msg_leak.id)
+
+                # Reposter les 3 dashboards au bas du canal
+                try:
+                    cur_seen = load_seen()
+                    cur_active = cur_seen.get("active_msgs", {})
+                    old_to_del = [cur_active.get("mirrors"), cur_active.get("crypto"), cur_active.get("polls")]
+                    old_to_del = [i for i in old_to_del if i]
+                    if old_to_del:
+                        await client.delete_messages(channel, old_to_del)
+
+                    m_text, _ = format_mirrors_message()
+                    new_m = await client.send_message(channel, m_text, buttons=get_mirrors_buttons(), link_preview=False, parse_mode='html')
+                    cur_active["mirrors"] = new_m.id
+                    await asyncio.sleep(0.3)
+
+                    c_text, _ = format_crypto_message()
+                    new_c = await client.send_message(channel, c_text, parse_mode='html')
+                    cur_active["crypto"] = new_c.id
+                    await asyncio.sleep(0.3)
+
+                    p_text, _ = format_polls_message()
+                    new_p = await client.send_message(channel, p_text, parse_mode='html')
+                    cur_active["polls"] = new_p.id
+
+                    cur_seen["active_msgs"] = cur_active
+                    save_seen(cur_seen)
+                except Exception as e_rep:
+                    print(f"[Direct Transfer Repost Dashboards Error] {e_rep}", flush=True)
+
+            # 7. Confirmation finale à l'utilisateur
+            await status_msg.edit(
+                f"✅ <b>LEAK PUBLIÉ AVEC SUCCÈS SUR LE CANAL !</b>\n\n"
+                f"🎯 <b>Titre :</b> <code>{html.escape(title)}</code>\n"
+                f"📢 <b>Canal :</b> {channel.title}\n"
+                f"📁 <i>Le média haute qualité et l'alerte sont maintenant visibles par tous les abonnés du canal.</i>",
+                parse_mode='html'
+            )
+
         if not raw.startswith('/'):
+            if event.is_private:
+                try:
+                    await handle_direct_leak_transfer(event)
+                except Exception as e_transfer:
+                    print(f"[Direct Transfer Error] {e_transfer}", flush=True)
             return
 
         # Normaliser les commandes avec espaces (ex: '/ mcap 7M', '/  crypto', etc.)
@@ -1417,7 +1654,7 @@ async def monitor_loop():
 
             elif cmd in ['/mirrors', '/status']:
                 m_text, _ = format_mirrors_message()
-                await reply_and_auto_delete(m_text)
+                await reply_and_auto_delete(m_text, buttons=get_mirrors_buttons())
 
             elif cmd in ['/announcements', '/anns', '/news']:
                 anns = fetch_announcements()
@@ -1736,7 +1973,7 @@ async def monitor_loop():
                     mirrors_text, mirrors_fp = format_mirrors_message()
                     if mirrors_text and mirrors_fp and mirrors_fp != last_mirrors_fp:
                         try:
-                            await client.edit_message(channel, message=mirrors_id, text=mirrors_text, parse_mode='html')
+                            await client.edit_message(channel, message=mirrors_id, text=mirrors_text, buttons=get_mirrors_buttons(), link_preview=False, parse_mode='html')
                             last_mirrors_fp = mirrors_fp
                             print(f"[Miroirs mis à jour dynamiquement] Message #{mirrors_id} modifié.", flush=True)
                         except MessageNotModifiedError:

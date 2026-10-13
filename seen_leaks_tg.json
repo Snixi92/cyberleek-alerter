@@ -1,7 +1,8 @@
 {
   "leeks": [
-    "DUDEVmNnNAeFaKtRdYWRaPVwiACHcVV95FZEepvN74M7",
+    "C4AvWvLEtXvEZJTuJJXM4XyiVdtEr74A4eedk23n3GYB",
     "EMQM3fERao1bDPTaCXj6C77HFMfspyRyXwDeiQJUK4xr",
+    "DUDEVmNnNAeFaKtRdYWRaPVwiACHcVV95FZEepvN74M7",
     "9wH3mQYnjQ3GS5cYRemuJpWDxXwABL2Q2M3ueUW6kfCZ",
     "7CU41C3VfSZZF7EoACPxp7F2kWqDESVmsrsN8QwdUBnv",
     "2xSqwTKe58eJQydc9SxQS624Gvf3mdzz6JdVDmsjwscB",
@@ -22,8 +23,7 @@
     "FSKYZHqqzwKMYevwdZuAM4KRkcNQZqto9RLM27nKeEas",
     "3k3DqRCTKznq9bmSAa9bxBDC6poRL97johxYNNVXiZNv",
     "CXjLRA8wKBQKmhyz1MaFEsW6zgJ3F6FjDb2Y6j9YGiwp",
-    "9qjyztEygKNRf5CG6MHSTNbJqAcVjJD4n7JazrhoTuiG",
-    "C4AvWvLEtXvEZJTuJJXM4XyiVdtEr74A4eedk23n3GYB"
+    "9qjyztEygKNRf5CG6MHSTNbJqAcVjJD4n7JazrhoTuiG"
   ],
   "announcements": [
     "9QdqesNpYVMxwGqLmLMYNQRaJZeSx7ruN3bAtejQppta",
@@ -35,17 +35,34 @@
     "Es4yQSCBoJtroBAaeg9x1LzgR1BTnNQLcoLbyxjLrJEJ"
   ],
   "current_poll_title": "Next GTA 6 Freeroam Lucia Leek?",
-  "last_poll_leader": "Pool minigame",
-  "current_mcap_level": 4000000,
+  "last_poll_leader": "Barbershop",
+  "current_mcap_level": 1000000,
   "mcap_min_threshold": 7000000,
   "mcap_muted": false,
-  "pending_deletions": [],
-  "last_channel_msg_id": 991,
+  "pending_deletions": [
+    {
+      "chat_id": 3932229737,
+      "msg_id": 1056,
+      "delete_at": 1791900568.228891
+    }
+  ],
+  "last_channel_msg_id": 1056,
   "initialized": true,
   "active_msgs": {
-    "mirrors": 948,
-    "crypto": 949,
-    "polls": 950,
-    "leak": 954
+    "mirrors": 1040,
+    "crypto": 1041,
+    "polls": 1042,
+    "leak": 1039
+  },
+  "saved_leaks": {
+    "Direct_1791823729_8522687810": {
+      "title": "GTA 6 : Jump (NSFW)",
+      "video_path": "C:\\Users\\Yassir\\.gemini\\antigravity\\scratch\\cyberleek-discord-bot\\saved_leaks\\Direct_1791823729_8522687810\\jump.mp4",
+      "zip_path": null,
+      "password": "jump",
+      "timestamp": 1791825909,
+      "leak_msg_id": 1039,
+      "video_msg_id": 1034
+    }
   }
 }
