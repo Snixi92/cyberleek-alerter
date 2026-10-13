@@ -987,6 +987,85 @@ def download_bedrive(url, dest):
                 pass
     return False
 
+def download_tempsh(url, dest):
+    """
+    Télécharge automatiquement un fichier depuis Temp.sh en soumettant le formulaire POST requis.
+    """
+    try:
+        ctx = ssl._create_unverified_context()
+        cj = http.cookiejar.CookieJar()
+        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj), urllib.request.HTTPSHandler(context=ctx))
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': url,
+            'Origin': 'https://temp.sh'
+        }
+        # 1. Vérification GET
+        req_get = urllib.request.Request(url, headers=headers)
+        with opener.open(req_get, timeout=15) as r_get:
+            body = r_get.read(4096)
+            if b'Download limit reached' in body or b'404 Not Found' in body:
+                return False
+
+        # 2. Requête POST pour déclencher le téléchargement du fichier
+        req_post = urllib.request.Request(
+            url,
+            data=b'',
+            headers={**headers, 'Content-Type': 'application/x-www-form-urlencoded'}
+        )
+        with opener.open(req_post, timeout=60) as resp, open(dest, 'wb') as f_out:
+            shutil.copyfileobj(resp, f_out)
+
+        if os.path.exists(dest):
+            is_valid, kind = is_valid_binary_media_or_archive(dest)
+            if is_valid:
+                return True
+            else:
+                try: os.remove(dest)
+                except Exception: pass
+    except Exception as e:
+        print(f"[Temp.sh Downloader Notice] {e}", flush=True)
+        if os.path.exists(dest):
+            try: os.remove(dest)
+            except Exception: pass
+    return False
+
+async def repost_dashboards_at_bottom(client, channel):
+    """
+    Supprime et reposte immédiatement les 3 tableaux de bord permanents (Miroirs, Crypto, Sondage)
+    au tout bas du canal pour maintenir une organisation parfaite après chaque alerte ou publication de leak.
+    """
+    try:
+        cur_seen = load_seen()
+        cur_active = cur_seen.get("active_msgs", {})
+        old_to_del = [cur_active.get("mirrors"), cur_active.get("crypto"), cur_active.get("polls")]
+        old_to_del = [i for i in old_to_del if i]
+        if old_to_del:
+            try:
+                await client.delete_messages(channel, old_to_del)
+            except Exception:
+                pass
+
+        m_text, _ = format_mirrors_message()
+        new_m = await client.send_message(channel, m_text, buttons=get_mirrors_buttons(), link_preview=False, parse_mode='html')
+        cur_active["mirrors"] = new_m.id
+        await asyncio.sleep(0.3)
+
+        c_text, _ = format_crypto_message()
+        new_c = await client.send_message(channel, c_text, parse_mode='html')
+        cur_active["crypto"] = new_c.id
+        await asyncio.sleep(0.3)
+
+        p_text, _ = format_polls_message()
+        new_p = await client.send_message(channel, p_text, parse_mode='html')
+        cur_active["polls"] = new_p.id
+
+        cur_seen["active_msgs"] = cur_active
+        save_seen(cur_seen)
+        print(f"[Dashboards Repostés au bas du canal] Mirrors: #{new_m.id}, Crypto: #{new_c.id}, Polls: #{new_p.id}", flush=True)
+    except Exception as e_rep:
+        print(f"[Erreur Repost Dashboards] {e_rep}", flush=True)
+
 async def process_and_send_leak_media(client, channel, leak, reply_to_id=None, auto_delete_delay=None):
     """
     Télécharge le fichier original du leak depuis les miroirs décentralisés (Arweave, Bedrive, etc.),
@@ -1047,7 +1126,8 @@ async def process_and_send_leak_media(client, channel, leak, reply_to_id=None, a
                     file=saved_video,
                     caption=vid_cap,
                     parse_mode='html',
-                    force_document=True,
+                    supports_streaming=True,
+                    spoiler=True,
                     reply_to=reply_to_id
                 )
                 if auto_delete_delay:
@@ -1071,6 +1151,9 @@ async def process_and_send_leak_media(client, channel, leak, reply_to_id=None, a
                 )
                 if auto_delete_delay:
                     asyncio.create_task(delete_after_delay(client, channel, msg_z.id, auto_delete_delay))
+
+            if not auto_delete_delay:
+                await repost_dashboards_at_bottom(client, channel)
             return
         except Exception as e_cached:
             print(f"[Media Leak] Erreur envoi depuis base locale : {e_cached}", flush=True)
@@ -1127,6 +1210,21 @@ async def process_and_send_leak_media(client, channel, leak, reply_to_id=None, a
                             downloaded_file = dest
                             file_size_mb = os.path.getsize(dest) / (1024 * 1024)
                             print(f"[Media Leak] Téléchargement Bedrive réussi ({file_size_mb:.2f} Mo) [type: {kind}] !", flush=True)
+                            break
+                        else:
+                            try:
+                                os.remove(dest)
+                            except Exception:
+                                pass
+
+                # Essai Temp.sh si applicable
+                if "temp.sh" in u.lower():
+                    if download_tempsh(u, dest):
+                        is_valid, kind = is_valid_binary_media_or_archive(dest)
+                        if is_valid:
+                            downloaded_file = dest
+                            file_size_mb = os.path.getsize(dest) / (1024 * 1024)
+                            print(f"[Media Leak] Téléchargement Temp.sh réussi ({file_size_mb:.2f} Mo) [type: {kind}] !", flush=True)
                             break
                         else:
                             try:
@@ -1242,7 +1340,8 @@ async def process_and_send_leak_media(client, channel, leak, reply_to_id=None, a
                     file=media_extracted,
                     caption=vid_cap,
                     parse_mode='html',
-                    force_document=True,
+                    supports_streaming=True,
+                    spoiler=True,
                     reply_to=reply_to_id
                 )
                 if auto_delete_delay:
@@ -1269,6 +1368,9 @@ async def process_and_send_leak_media(client, channel, leak, reply_to_id=None, a
                 asyncio.create_task(delete_after_delay(client, channel, msg_z.id, auto_delete_delay))
             print("[Media Leak] Archive .ZIP envoyée avec succès !", flush=True)
 
+            if not auto_delete_delay:
+                await repost_dashboards_at_bottom(client, channel)
+
         elif kind in ["video", "image", "binary"]:
             raw_size_mb = os.path.getsize(downloaded_file) / (1024 * 1024)
             file_cap = (
@@ -1277,14 +1379,25 @@ async def process_and_send_leak_media(client, channel, leak, reply_to_id=None, a
                 f"✨ <i>Qualité 100% brute d'origine (sans compression)</i>"
             )
             print(f"[Media Leak] Envoi du fichier brut sur Telegram...", flush=True)
-            msg_raw = await client.send_file(
-                channel,
-                file=downloaded_file,
-                caption=file_cap,
-                parse_mode='html',
-                force_document=True,
-                reply_to=reply_to_id
-            )
+            if kind == "video":
+                msg_raw = await client.send_file(
+                    channel,
+                    file=downloaded_file,
+                    caption=file_cap,
+                    parse_mode='html',
+                    supports_streaming=True,
+                    spoiler=True,
+                    reply_to=reply_to_id
+                )
+            else:
+                msg_raw = await client.send_file(
+                    channel,
+                    file=downloaded_file,
+                    caption=file_cap,
+                    parse_mode='html',
+                    force_document=True,
+                    reply_to=reply_to_id
+                )
             if auto_delete_delay:
                 asyncio.create_task(delete_after_delay(client, channel, msg_raw.id, auto_delete_delay))
             print("[Media Leak] Fichier original envoyé avec succès !", flush=True)
@@ -1300,6 +1413,9 @@ async def process_and_send_leak_media(client, channel, leak, reply_to_id=None, a
                 "timestamp": leak.get("timestamp")
             }
             save_seen(current_seen)
+
+            if not auto_delete_delay:
+                await repost_dashboards_at_bottom(client, channel)
 
     except Exception as e_proc:
         print(f"[Erreur globale media leak] {e_proc}", flush=True)
@@ -1537,39 +1653,13 @@ async def monitor_loop():
                         file=event.message.media,
                         caption=vid_cap,
                         parse_mode='html',
-                        force_document=True,
+                        supports_streaming=True,
+                        spoiler=True,
                         reply_to=msg_leak.id
                     )
+                    await repost_dashboards_at_bottom(client, channel)
                 else:
                     await process_and_send_leak_media(client, channel, leak_obj, reply_to_id=msg_leak.id)
-
-                # Reposter les 3 dashboards au bas du canal
-                try:
-                    cur_seen = load_seen()
-                    cur_active = cur_seen.get("active_msgs", {})
-                    old_to_del = [cur_active.get("mirrors"), cur_active.get("crypto"), cur_active.get("polls")]
-                    old_to_del = [i for i in old_to_del if i]
-                    if old_to_del:
-                        await client.delete_messages(channel, old_to_del)
-
-                    m_text, _ = format_mirrors_message()
-                    new_m = await client.send_message(channel, m_text, buttons=get_mirrors_buttons(), link_preview=False, parse_mode='html')
-                    cur_active["mirrors"] = new_m.id
-                    await asyncio.sleep(0.3)
-
-                    c_text, _ = format_crypto_message()
-                    new_c = await client.send_message(channel, c_text, parse_mode='html')
-                    cur_active["crypto"] = new_c.id
-                    await asyncio.sleep(0.3)
-
-                    p_text, _ = format_polls_message()
-                    new_p = await client.send_message(channel, p_text, parse_mode='html')
-                    cur_active["polls"] = new_p.id
-
-                    cur_seen["active_msgs"] = cur_active
-                    save_seen(cur_seen)
-                except Exception as e_rep:
-                    print(f"[Direct Transfer Repost Dashboards Error] {e_rep}", flush=True)
 
             # 7. Confirmation finale à l'utilisateur
             await status_msg.edit(
