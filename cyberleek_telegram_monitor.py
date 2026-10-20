@@ -86,6 +86,12 @@ BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8985354063:AAHp-c4YNe0YI9Is0Ie
 TOKEN = BOT_TOKEN
 CHANNEL_ID = int(os.environ.get("TELEGRAM_CHANNEL_ID", "-1003932229737"))
 SESSION_STRING = os.environ.get("TELEGRAM_SESSION", "")
+ADMIN_USER_IDS = [8522687810]
+_env_admins = os.environ.get("ADMIN_USER_IDS", "")
+if _env_admins:
+    for _a in _env_admins.split(","):
+        if _a.strip().isdigit():
+            ADMIN_USER_IDS.append(int(_a.strip()))
 
 
 
@@ -1521,6 +1527,9 @@ async def monitor_loop():
         raw = (event.message.raw_text or event.message.text or "").strip()
 
         async def handle_direct_leak_transfer(event):
+            if event.sender_id not in ADMIN_USER_IDS:
+                print(f"[Direct Transfer Rejeté] Expéditeur non-admin ignoré (ID: {event.sender_id})", flush=True)
+                return
             text = (event.message.raw_text or event.message.text or "").strip()
             has_media = bool(event.message.media)
             has_fwd = bool(event.message.fwd_from)
@@ -1768,6 +1777,10 @@ async def monitor_loop():
             elif cmd in ['/mcap', '/marketcap']:
                 args_str = " ".join(parts[1:]).strip().lower()
                 current_seen = load_seen()
+
+                if args_str and event.sender_id not in ADMIN_USER_IDS:
+                    await reply_and_auto_delete("⛔ <i>Seul l'administrateur est autorisé à modifier la configuration des alertes Market Cap.</i>")
+                    return
 
                 # 1. Mute / Silence complet
                 if args_str in ['mute', 'off', 'silence', 'silencieux', 'desactiver', 'désactiver', 'couper', 'stop']:
