@@ -44,13 +44,13 @@
   "mcap_min_threshold": 7000000,
   "mcap_muted": false,
   "pending_deletions": [],
-  "last_channel_msg_id": 1066,
+  "last_channel_msg_id": 1117,
   "initialized": true,
   "active_msgs": {
-    "mirrors": 1040,
-    "crypto": 1041,
-    "polls": 1042,
-    "leak": 1069
+    "mirrors": 1115,
+    "crypto": 1116,
+    "polls": 1117,
+    "leak": 1111
   },
   "saved_leaks": {
     "Direct_1791823729_8522687810": {
